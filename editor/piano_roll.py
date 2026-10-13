@@ -9,6 +9,7 @@ from tkinter import ttk, messagebox, simpledialog
 from midi import MidiError
 from note_ops import insert_note, delete_note, move_note, quantize_notes, resize_note, transform_notes, delete_notes
 from velocity_ops import set_note_velocities
+from meter_grid import grid_lines
 
 NOTE_HEIGHT = 12
 PIXELS_PER_BEAT = 64
@@ -376,15 +377,14 @@ class PianoRoll(tk.Toplevel):
                                    anchor="w", font=("Arial", 9))
                 canvas.create_line(0, y + NOTE_HEIGHT, width, y + NOTE_HEIGHT,
                                    fill="#b6c0d0")
-        beats = max(1, (width - KEYBOARD_WIDTH) // PIXELS_PER_BEAT)
-        for beat in range(beats + 1):
-            x = KEYBOARD_WIDTH + beat * PIXELS_PER_BEAT
-            is_bar = beat % 4 == 0
+        end_tick = max_tick + division * 8
+        for tick, is_bar, bar in grid_lines(song, end_tick):
+            x = KEYBOARD_WIDTH + tick / division * PIXELS_PER_BEAT
             canvas.create_line(x, TOP_MARGIN, x, height,
                                fill="#a4adbb" if is_bar else "#d9dee8",
                                width=1 if is_bar else 0.5)
             if is_bar:
-                canvas.create_text(x + 3, 12, text=str(beat // 4 + 1),
+                canvas.create_text(x + 3, 12, text=str(bar),
                                    anchor="w", fill="#334155")
         for index, (start, end, pitch, channel, velocity, _, _) in enumerate(self.notes):
             x1 = KEYBOARD_WIDTH + start / division * PIXELS_PER_BEAT
