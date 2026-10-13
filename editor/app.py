@@ -24,6 +24,8 @@ class App:
         self.song = None
         self.path = None
         self.history = []
+        self.muted_tracks = set()
+        self.solo_tracks = set()
         self.player = MidiPlayer(on_state=self.playback_state, on_error=self.playback_error)
         self.output_name = tk.StringVar(value='')
         self.send_sysex = tk.BooleanVar(value=False)
@@ -69,7 +71,7 @@ class App:
         ttk.Button(transport_bar, text="Open MIDI...", command=self.open_file).pack(side="left", padx=10)
         ttk.Button(transport_bar, text="Save As...", command=self.save_as).pack(side="left", padx=3)
         ttk.Button(transport_bar, text="MIDI output...", command=self.choose_output).pack(side="left", padx=10)
-        self.sequencer = SequencerView(self.root, on_track=self.select_sequencer_track, on_open=self.open_sequencer_track)
+        self.sequencer = SequencerView(self.root, on_track=self.select_sequencer_track, on_open=self.open_sequencer_track, on_toggle=self.toggle_track_state)
         self.sequencer.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
         outer = ttk.Panedwindow(self.root, orient=tk.HORIZONTAL)
         outer.pack(fill=tk.BOTH, expand=False, padx=8, pady=8)
@@ -96,6 +98,19 @@ class App:
         self.events.bind("<Double-1>", lambda _: self.edit_event())
         self.status = tk.StringVar(value="Open a MIDI file to begin.")
         ttk.Label(self.root, textvariable=self.status).pack(fill=tk.X, padx=8, pady=(0, 6))
+
+    def toggle_track_state(self, index, kind):
+        if self.player.playing:
+            messagebox.showinfo("Track controls", "Stop playback before changing Mute or Solo.")
+            return
+        if self.song is None or not 0 <= index < len(self.song.tracks):
+            return
+        target = self.muted_tracks if kind == "mute" else self.solo_tracks
+        if index in target:
+            target.remove(index)
+        else:
+            target.add(index)
+        self.sequencer.set_mix(self.muted_tracks, self.solo_tracks)
 
     def select_sequencer_track(self, index):
         if self.song is not None and 0 <= index < len(self.song.tracks):
@@ -156,7 +171,10 @@ class App:
             messagebox.showinfo('MIDI playback', 'Open a MIDI file first.')
             return
         try:
-            self.player.play(self.song, self.output_name.get(), include_sysex=self.send_sysex.get())
+            self.player.play(self.song, self.output_name.get(), include_sysex=self.send_sysex.get(),
+                             enabled_tracks={i for i in range(len(self.song.tracks))
+                                             if i not in self.muted_tracks and
+                                             (not self.solo_tracks or i in self.solo_tracks)})
         except MidiError as exc:
             messagebox.showerror('MIDI playback', str(exc))
 
@@ -176,11 +194,14 @@ class App:
             messagebox.showerror("Cannot open MIDI", str(exc))
             return
         self.song, self.path, self.history = song, Path(path), []
+        self.muted_tracks.clear()
+        self.solo_tracks.clear()
         self.refresh()
         self.status.set(f"{self.path.name} | Format {song.fmt} | {len(song.tracks)} tracks | division {song.division}")
 
     def refresh(self):
         self.sequencer.set_song(self.song)
+        self.sequencer.set_mix(self.muted_tracks, self.solo_tracks)
         self.tracks.delete(*self.tracks.get_children())
         self.events.delete(*self.events.get_children())
         if self.song:
