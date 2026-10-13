@@ -112,34 +112,46 @@ class App:
         self.select_sequencer_track(track_index)
         dialog = tk.Toplevel(self.root)
         dialog.title(f"Track {track_index+1} / Clip {clip_index+1}")
-        dialog.geometry("370x195")
+        dialog.geometry("420x240")
         dialog.transient(self.root)
-        ttk.Label(dialog, text="Move or duplicate MIDI notes by a number of beats."
+        ttk.Label(dialog, text="Move or duplicate MIDI notes across tracks and beats."
                   ).pack(pady=(12, 6))
         ttk.Label(dialog, text="Controllers, SysEx and tempo are not moved."
                   ).pack(pady=2)
         beats = tk.IntVar(value=4)
         line = ttk.Frame(dialog)
-        line.pack(pady=10)
+        line.pack(pady=5)
         ttk.Label(line, text="Offset in beats:").pack(side="left")
         ttk.Spinbox(line, from_=-999, to=999, textvariable=beats, width=8).pack(side="left", padx=8)
+        target_line = ttk.Frame(dialog)
+        target_line.pack(pady=5)
+        ttk.Label(target_line, text="Destination track:").pack(side="left")
+        destination = tk.IntVar(value=track_index + 1)
+        ttk.Spinbox(target_line, from_=1, to=len(self.song.tracks),
+                    textvariable=destination, width=8).pack(side="left", padx=8)
         actions = ttk.Frame(dialog)
         actions.pack(pady=5)
         def apply(duplicate):
             try:
                 delta = beats.get() * self.song.division
-                if delta == 0:
-                    raise MidiError("Choose a non-zero beat offset")
+                target = destination.get() - 1
+                if delta == 0 and target == track_index:
+                    raise MidiError("Choose another track or a non-zero beat offset")
+                if not 0 <= target < len(self.song.tracks):
+                    raise MidiError("Destination track is out of range")
                 self.snapshot()
-                count = edit_clip(self.song, track_index, clip_index, delta, duplicate)
-            except (MidiError, tk.TclError) as exc:
-                if self.history:
+                try:
+                    count = edit_clip(self.song, track_index, clip_index, delta, duplicate,
+                                      destination_track=target)
+                except Exception:
                     self.history.pop()
+                    raise
+            except (MidiError, tk.TclError, ValueError) as exc:
                 messagebox.showerror("MIDI clip", str(exc), parent=dialog)
                 return
             self.sequencer.draw()
             self.show_events()
-            self.status.set(f"{'Copied' if duplicate else 'Moved'} {count} MIDI notes; Save As to save.")
+            self.status.set(f"{'Copied' if duplicate else 'Moved'} {count} MIDI notes to track {target+1}; Save As to save.")
             dialog.destroy()
         ttk.Button(actions, text="Move", command=lambda: apply(False)).pack(side="left", padx=6)
         ttk.Button(actions, text="Duplicate", command=lambda: apply(True)).pack(side="left", padx=6)
