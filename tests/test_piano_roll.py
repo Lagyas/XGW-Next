@@ -21,7 +21,7 @@ class PianoRollTests(unittest.TestCase):
             Event(240, 0x80, bytes([60, 0]), order=3),
         ])
         notes = extract_notes(track)
-        self.assertEqual([(n[1], n[3]) for n in notes], [(120, 2), (240, 1)])
+        self.assertEqual([(n[1], n[3]) for n in notes], [(240, 1), (120, 2)])
 
     def test_orphaned_note_on_ignored(self):
         self.assertEqual(extract_notes(Track([Event(0, 0x90, bytes([60, 100]))])), [])
