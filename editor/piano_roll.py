@@ -224,14 +224,24 @@ class PianoRoll(tk.Toplevel):
     def preview_note_copy(self, dx, dy):
         self.canvas.delete("copy-preview")
         division = self.app.song.division
-        if division <= 0 or division & 0x8000:
+        if division <= 0 or division & 0x8000 or self.right_origin is None:
             return
+        anchor_index = self.right_origin[0]
+        if anchor_index is None:
+            return
+        try:
+            anchor_start = self.notes[anchor_index][0]
+            target = max(0, round(anchor_start + dx * division / PIXELS_PER_BEAT))
+            delta_ticks = snapped_tick(target, division, self.snap_option.get()) - anchor_start
+        except MidiError:
+            return
+        delta_pitch = -round(dy / NOTE_HEIGHT)
         for start, end, pitch, _, _, on_idx, off_idx in self.notes:
             if (on_idx, off_idx) not in self.selected_pairs:
                 continue
-            x1 = KEYBOARD_WIDTH + start / division * PIXELS_PER_BEAT + dx
-            x2 = KEYBOARD_WIDTH + end / division * PIXELS_PER_BEAT + dx
-            y = TOP_MARGIN + (127 - pitch) * NOTE_HEIGHT + dy
+            x1 = KEYBOARD_WIDTH + (start + delta_ticks) / division * PIXELS_PER_BEAT
+            x2 = KEYBOARD_WIDTH + (end + delta_ticks) / division * PIXELS_PER_BEAT
+            y = TOP_MARGIN + (127 - pitch - delta_pitch) * NOTE_HEIGHT
             self.canvas.create_rectangle(x1, y + 1, max(x1 + 3, x2),
                                          y + NOTE_HEIGHT - 1, outline="#16a34a",
                                          width=2, dash=(3, 2), tags="copy-preview")
@@ -253,10 +263,10 @@ class PianoRoll(tk.Toplevel):
             if division <= 0 or division & 0x8000:
                 return
             pairs = self.selected_note_pairs()
-            delta_ticks = (snapped_tick(max(0, round(self.notes[index][0] + dx * division / PIXELS_PER_BEAT)),
-                                        division, self.snap_option.get()) - self.notes[index][0])
             delta_pitch = -round(dy / NOTE_HEIGHT)
             try:
+                delta_ticks = (snapped_tick(max(0, round(self.notes[index][0] + dx * division / PIXELS_PER_BEAT)),
+                                            division, self.snap_option.get()) - self.notes[index][0])
                 self.app.snapshot()
                 transform_notes(self.app.song, self.track_index, pairs,
                                 delta_ticks=delta_ticks, delta_pitch=delta_pitch,
