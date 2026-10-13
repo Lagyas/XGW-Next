@@ -74,11 +74,14 @@ def midi2_note_on(group, channel, note, velocity, attribute_type=0, attribute_da
 
 def midi2_note_off(group, channel, note, velocity=0, attribute_type=0, attribute_data=0):
     """Construct MIDI 2.0 Note Off (status 8), preserving 16-bit release velocity."""
-    packet = midi2_note_on(group, channel, note, max(1, velocity),
-                           attribute_type, attribute_data)
-    if type(velocity) is not int or not 0 <= velocity <= 65535:
-        raise MidiError("MIDI 2.0 release velocity out of range")
-    first = (packet.words[0] & ~(0xf << 20)) | (0x8 << 20)
+    if any(type(v) is not int for v in
+           (group, channel, note, velocity, attribute_type, attribute_data)):
+        raise MidiError("MIDI 2.0 note fields must be integers")
+    if not (0 <= group <= 15 and 0 <= channel <= 15 and
+            0 <= note <= 127 and 0 <= velocity <= 65535 and
+            0 <= attribute_type <= 255 and 0 <= attribute_data <= 65535):
+        raise MidiError("MIDI 2.0 note field out of range")
+    first = (0x4 << 28) | (group << 24) | (0x8 << 20) | (channel << 16) | (note << 8) | attribute_type
     return UmpPacket((first, (velocity << 16) | attribute_data))
 
 
