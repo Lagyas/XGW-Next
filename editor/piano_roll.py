@@ -10,6 +10,7 @@ from midi import MidiError
 from note_ops import insert_note, delete_note, move_note, quantize_notes, resize_note, transform_notes, delete_notes
 from velocity_ops import set_note_velocities
 from meter_grid import grid_lines
+from snap_grid import SNAP_OPTIONS, snapped_tick
 
 NOTE_HEIGHT = 12
 PIXELS_PER_BEAT = 64
@@ -85,11 +86,15 @@ class PianoRoll(tk.Toplevel):
         self.bind("<Control-d>", self.duplicate_selected)
         toolbar = ttk.Frame(self)
         toolbar.pack(fill="x", padx=8, pady=4)
+        self.snap_option = tk.StringVar(value="1/16")
+        ttk.Label(toolbar, text="Snap:").pack(side="left", padx=(0, 4))
+        ttk.Combobox(toolbar, textvariable=self.snap_option, values=SNAP_OPTIONS,
+                     state="readonly", width=7).pack(side="left", padx=(0, 12))
         ttk.Button(toolbar, text="Insert note", command=self.insert_note).pack(side="left")
         ttk.Button(toolbar, text="Delete selected", command=self.delete_selected).pack(side="left")
         ttk.Button(toolbar, text="Select all", command=self.select_all_notes).pack(side="left")
         ttk.Button(toolbar, text="Duplicate +1 beat", command=self.duplicate_selected).pack(side="left")
-        ttk.Button(toolbar, text="Quantize 1/16", command=self.quantize).pack(side="left")
+        ttk.Button(toolbar, text="Quantize to snap", command=self.quantize).pack(side="left")
         self.drag_origin = None
         self.selection_origin = None
         self.right_origin = None
@@ -248,7 +253,8 @@ class PianoRoll(tk.Toplevel):
             if division <= 0 or division & 0x8000:
                 return
             pairs = self.selected_note_pairs()
-            delta_ticks = round(dx * division / PIXELS_PER_BEAT)
+            delta_ticks = (snapped_tick(max(0, round(self.notes[index][0] + dx * division / PIXELS_PER_BEAT)),
+                                        division, self.snap_option.get()) - self.notes[index][0])
             delta_pitch = -round(dy / NOTE_HEIGHT)
             try:
                 self.app.snapshot()
@@ -294,7 +300,7 @@ class PianoRoll(tk.Toplevel):
         menu.add_separator()
         menu.add_command(label="Select all   Ctrl+A", command=self.select_all_notes)
         menu.add_command(label="Insert note...", command=self.insert_note)
-        menu.add_command(label="Quantize 1/16", command=self.quantize)
+        menu.add_command(label="Quantize to snap", command=self.quantize)
         menu.add_separator()
         menu.add_command(label="Undo   Ctrl+Z", command=self.undo_note_edit,
                          state="normal" if self.app.history else "disabled")
@@ -461,15 +467,19 @@ class PianoRoll(tk.Toplevel):
             messagebox.showerror("Delete notes", str(exc), parent=self)
 
     def quantize(self):
+        option = self.snap_option.get()
+        if option == "Off":
+            self.info.set("Choose a Snap value before quantizing.")
+            return
         try:
             self.app.snapshot()
-            count = quantize_notes(self.app.song, self.track_index, 16)
+            count = quantize_notes(self.app.song, self.track_index, int(option.split("/")[1]))
             if count == 0:
                 self.app.history.pop()
             self.selected = None
             self.render()
             self.app.show_events()
-            self.info.set(f"Quantized {count} notes to 1/16.")
+            self.info.set(f"Quantized {count} notes to {option}.")
         except MidiError as exc:
             self.app.song = self.app.history.pop()
             messagebox.showerror("Quantize", str(exc), parent=self)
@@ -508,12 +518,14 @@ class PianoRoll(tk.Toplevel):
         start, end, pitch, _, _, _, _ = self.notes[index]
         dx = self.canvas.canvasx(event.x) - old_x
         dy = self.canvas.canvasy(event.y) - old_y
-        tick = max(0, round(start + dx * self.app.song.division / PIXELS_PER_BEAT))
+        tick = snapped_tick(max(0, round(start + dx * self.app.song.division / PIXELS_PER_BEAT)),
+                            self.app.song.division, self.snap_option.get())
         target_pitch = max(0, min(127, pitch - round(dy / NOTE_HEIGHT)))
         if resizing:
             tick = start
             target_pitch = pitch
-            new_end = max(start + 1, round(end + dx * self.app.song.division / PIXELS_PER_BEAT))
+            new_end = max(start + 1, snapped_tick(max(0, round(end + dx * self.app.song.division / PIXELS_PER_BEAT)),
+                                                    self.app.song.division, self.snap_option.get()))
             x2 = KEYBOARD_WIDTH + new_end / self.app.song.division * PIXELS_PER_BEAT
         else:
             x2 = KEYBOARD_WIDTH + (tick + end - start) / self.app.song.division * PIXELS_PER_BEAT
