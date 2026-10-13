@@ -272,26 +272,44 @@ class App:
         self.root.after(0, lambda: messagebox.showerror('MIDI playback', error))
 
     def choose_output(self):
-        try:
-            outputs = available_outputs()
-        except MidiError as exc:
-            messagebox.showerror('MIDI output', str(exc))
-            return
-        if not outputs:
-            messagebox.showinfo('MIDI output', 'No MIDI outputs detected.')
-            return
         chooser = tk.Toplevel(self.root)
-        chooser.title('Select MIDI output')
-        chooser.geometry('460x240')
-        ttk.Label(chooser, text='Choose the connected MIDI interface / Yamaha module:').pack(pady=10)
-        selection = tk.StringVar(value=self.output_name.get() if self.output_name.get() in outputs else outputs[0])
-        combo = ttk.Combobox(chooser, values=outputs, textvariable=selection, state='readonly', width=48)
-        combo.pack(padx=10, pady=10)
+        chooser.title("MIDI output — Windows")
+        chooser.geometry("590x310")
+        chooser.transient(self.root)
+        chooser.grab_set()
+        ttk.Label(chooser, text="MIDI OUT (hardware interface or software MIDI port)").pack(anchor="w", padx=12, pady=(12, 4))
+        selection = tk.StringVar(value=self.output_name.get())
+        combo = ttk.Combobox(chooser, textvariable=selection, state="readonly", width=72)
+        combo.pack(fill="x", padx=12, pady=4)
+        info = tk.StringVar(value="")
+        ttk.Label(chooser, textvariable=info, wraplength=555, justify="left").pack(fill="x", padx=12, pady=8)
+        def refresh():
+            try:
+                outputs = available_outputs()
+            except MidiError as exc:
+                combo.configure(values=())
+                info.set(str(exc))
+                return
+            combo.configure(values=outputs)
+            if outputs:
+                selection.set(selection.get() if selection.get() in outputs else outputs[0])
+                info.set(f"{len(outputs)} MIDI output(s) detected. Choose one and click Use this output.")
+            else:
+                selection.set("")
+                info.set("No MIDI OUT ports found by Windows/RtMidi. Connect and enable a USB-MIDI interface or install a virtual MIDI port (e.g. loopMIDI), then click Refresh. The Windows default audio speakers are NOT a MIDI OUT port.")
         def apply():
+            if not selection.get():
+                messagebox.showwarning("MIDI output", "No MIDI OUT selected. Click Refresh after connecting a MIDI device.", parent=chooser)
+                return
             self.output_name.set(selection.get())
-            self.status.set('MIDI output: ' + selection.get())
+            self.status.set("MIDI output: " + selection.get())
             chooser.destroy()
-        ttk.Button(chooser, text='Use this output', command=apply).pack(pady=10)
+        buttons = ttk.Frame(chooser)
+        buttons.pack(fill="x", padx=12, pady=10)
+        ttk.Button(buttons, text="Refresh MIDI ports", command=refresh).pack(side="left", padx=(0, 8))
+        ttk.Button(buttons, text="Use this output", command=apply).pack(side="left")
+        ttk.Button(buttons, text="Cancel", command=chooser.destroy).pack(side="right")
+        refresh()
 
     def play_midi(self):
         if self.song is None:
