@@ -18,11 +18,14 @@ def track_spans(song):
     return result
 
 class SequencerView(ttk.Frame):
-    def __init__(self, parent, on_track=None, on_open=None):
+    def __init__(self, parent, on_track=None, on_open=None, on_toggle=None):
         super().__init__(parent)
         self.song = None
         self.on_track = on_track
         self.on_open = on_open
+        self.on_toggle = on_toggle
+        self.muted = set()
+        self.solo = set()
         self.selected_track = 0
         self.canvas = tk.Canvas(self, background="#f9fafb", highlightthickness=0)
         xs = ttk.Scrollbar(self, orient="horizontal", command=self.canvas.xview)
@@ -35,6 +38,11 @@ class SequencerView(ttk.Frame):
         self.rowconfigure(0, weight=1)
         self.canvas.bind("<Button-1>", self.click)
         self.canvas.bind("<Double-Button-1>", self.double_click)
+        self.draw()
+
+    def set_mix(self, muted, solo):
+        self.muted = set(muted)
+        self.solo = set(solo)
         self.draw()
 
     def set_song(self, song):
@@ -56,6 +64,13 @@ class SequencerView(ttk.Frame):
     def click(self, event):
         row = self._row_at(event)
         if row is not None:
+            x = self.canvas.canvasx(event.x)
+            if 155 <= x < 185 and self.on_toggle:
+                self.on_toggle(row, "mute")
+                return
+            if 185 <= x < 215 and self.on_toggle:
+                self.on_toggle(row, "solo")
+                return
             self.selected_track = row
             self.draw()
             if self.on_track:
@@ -101,6 +116,12 @@ class SequencerView(ttk.Frame):
             c.create_text(10, y + 31, anchor="w",
                           text="CH " + (", ".join(map(str, channels)) if channels else "—"),
                           fill="#475569", font=("Arial", 9))
+            for x, name, active in ((155, "M", index in self.muted),
+                                    (185, "S", index in self.solo)):
+                c.create_rectangle(x, y + 9, x + 26, y + 32,
+                                   fill=("#f59e0b" if name == "M" else "#22c55e") if active else "#e2e8f0",
+                                   outline="#94a3b8")
+                c.create_text(x + 13, y + 20, text=name, font=("Arial", 10, "bold"))
             for start, end in spans[index]:
                 x1 = LEFT_WIDTH + start / division * BEAT_WIDTH
                 x2 = LEFT_WIDTH + max(end, start + division // 4) / division * BEAT_WIDTH
