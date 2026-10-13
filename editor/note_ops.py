@@ -50,8 +50,8 @@ def quantize_notes(song, track_index, denominator=16, strength=100):
         on, off = track.events[on_idx], track.events[off_idx]
         target = quantize_tick(on.tick, grid)
         delta = round((target - on.tick) * strength / 100)
-        if on.tick + delta < 0 or off.tick + delta < 0:
-            raise MidiError("Quantize would create a negative tick")
+        if not 0 <= on.tick + delta <= off.tick + delta <= 0x0fffffff:
+            raise MidiError("Quantize would exceed MIDI tick limits")
         changes.append((on, off, delta))
     for on, off, delta in changes:
         on.tick += delta
