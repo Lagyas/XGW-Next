@@ -32,6 +32,16 @@ class EventFieldsTests(unittest.TestCase):
             with self.assertRaises(MidiError):
                 encode_fields(event, values)
 
+    def test_polyphonic_aftertouch(self):
+        event = Event(0, 0xa2, bytes((60, 30)))
+        self.assertEqual([f[0] for f in event_fields(event)], ["Note", "Pressure"])
+        self.assertEqual(encode_fields(event, [64, 99]), bytes((64, 99)))
+
+    def test_channel_aftertouch(self):
+        event = Event(0, 0xd1, bytes((35,)))
+        self.assertEqual(event_fields(event)[0][1], 35)
+        self.assertEqual(encode_fields(event, [100]), bytes((100,)))
+
     def test_meta_not_supported(self):
         with self.assertRaises(MidiError):
             event_fields(Event(0, 0xff, b"", 0x2f))
