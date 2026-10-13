@@ -8,6 +8,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 from midi import MidiError
 from note_ops import insert_note, delete_note, move_note, quantize_notes, resize_note, transform_notes, delete_notes
+from velocity_ops import set_note_velocities
 
 NOTE_HEIGHT = 12
 PIXELS_PER_BEAT = 64
@@ -56,11 +57,18 @@ class PianoRoll(tk.Toplevel):
         area.pack(fill="both", expand=True)
         self.canvas = tk.Canvas(area, background="#f8fafc", highlightthickness=0)
         yscroll = ttk.Scrollbar(area, orient="vertical", command=self.canvas.yview)
-        xscroll = ttk.Scrollbar(area, orient="horizontal", command=self.canvas.xview)
-        self.canvas.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
+        xscroll = ttk.Scrollbar(area, orient="horizontal", command=self.horizontal_scroll)
+        self.canvas.configure(yscrollcommand=yscroll.set, xscrollcommand=self.sync_velocity_scroll)
+        self.velocity_canvas = tk.Canvas(area, background="#f0f3f8", height=115, highlightthickness=0)
+        self.velocity_canvas.bind("<ButtonPress-1>", self.velocity_press)
+        self.velocity_canvas.bind("<B1-Motion>", self.velocity_motion)
+        self.velocity_canvas.bind("<ButtonRelease-1>", self.velocity_release)
+        self.velocity_drag = None
+        self.xscroll = xscroll
         self.canvas.grid(row=0, column=0, sticky="nsew")
         yscroll.grid(row=0, column=1, sticky="ns")
-        xscroll.grid(row=1, column=0, sticky="ew")
+        self.velocity_canvas.grid(row=1, column=0, sticky="ew")
+        xscroll.grid(row=2, column=0, sticky="ew")
         area.columnconfigure(0, weight=1)
         area.rowconfigure(0, weight=1)
         self.canvas.bind("<ButtonPress-1>", self.begin_drag)
@@ -87,6 +95,96 @@ class PianoRoll(tk.Toplevel):
         self.context_menu = tk.Menu(self, tearoff=0)
         self.render()
         self.canvas.yview_moveto(0.32)
+
+    def horizontal_scroll(self, *args):
+        self.canvas.xview(*args)
+        self.velocity_canvas.xview(*args)
+
+    def sync_velocity_scroll(self, first, last):
+        self.xscroll.set(first, last)
+        if hasattr(self, "velocity_canvas"):
+            self.velocity_canvas.xview_moveto(float(first))
+
+    def render_velocity(self, width):
+        lane = self.velocity_canvas
+        lane.delete("all")
+        lane.configure(scrollregion=(0, 0, width, 115))
+        lane.create_text(6, 10, anchor="w", text="Velocity", fill="#334155")
+        lane.create_line(KEYBOARD_WIDTH, 14, width, 14, fill="#94a3b8")
+        lane.create_line(KEYBOARD_WIDTH, 109, width, 109, fill="#94a3b8")
+        division = self.app.song.division
+        if division <= 0 or division & 0x8000:
+            return
+        for start, _, _, _, velocity, on_idx, off_idx in self.notes:
+            x = KEYBOARD_WIDTH + start / division * PIXELS_PER_BEAT
+            y = 109 - velocity * 90 / 127
+            selected = (on_idx, off_idx) in self.selected_pairs
+            lane.create_line(x, 109, x, y, width=4,
+                             fill="#ea580c" if selected else "#2563eb",
+                             tags=(f"velocity_{on_idx}", "velocity"))
+            lane.create_oval(x - 4, y - 4, x + 4, y + 4,
+                             fill="#ea580c" if selected else "#2563eb",
+                             outline="", tags=(f"velocity_{on_idx}", "velocity"))
+
+    def velocity_target(self, event):
+        x = self.velocity_canvas.canvasx(event.x)
+        y = self.velocity_canvas.canvasy(event.y)
+        items = self.velocity_canvas.find_overlapping(x - 5, 14, x + 5, 112)
+        indices = []
+        for item in reversed(items):
+            for tag in self.velocity_canvas.gettags(item):
+                if tag.startswith("velocity_"):
+                    indices.append(int(tag[9:]))
+        if not indices:
+            return None
+        if len(indices) == 1:
+            return indices[0]
+        # Overlapping notes: prefer a selected velocity bar.
+        selected = {pair[0] for pair in self.selected_pairs}
+        return next((index for index in indices if index in selected), indices[0])
+
+    def velocity_value(self, event):
+        y = self.velocity_canvas.canvasy(event.y)
+        return max(1, min(127, round((109 - y) * 127 / 90)))
+
+    def velocity_press(self, event):
+        if self.app.player.playing:
+            messagebox.showwarning("Velocity", "Stop playback before editing.", parent=self)
+            return
+        index = self.velocity_target(event)
+        if index is None:
+            return
+        selected = {pair[0] for pair in self.selected_pairs}
+        targets = selected if index in selected else {index}
+        self.velocity_drag = (targets, self.velocity_value(event))
+        self.velocity_motion(event)
+
+    def velocity_motion(self, event):
+        if self.velocity_drag is None:
+            return
+        _, _ = self.velocity_drag
+        self.info.set(f"Velocity: {self.velocity_value(event)} (release to apply)")
+
+    def velocity_release(self, event):
+        if self.velocity_drag is None:
+            return
+        indices, _ = self.velocity_drag
+        self.velocity_drag = None
+        value = self.velocity_value(event)
+        changes = {index: value for index in indices
+                   if self.app.song.tracks[self.track_index].events[index].data[1] != value}
+        if not changes:
+            return
+        try:
+            self.app.snapshot()
+            set_note_velocities(self.app.song, self.track_index, changes)
+            self.render()
+            self.app.show_events()
+            self.info.set(f"Velocity {value} applied to {len(changes)} note(s).")
+        except MidiError as exc:
+            self.app.song = self.app.history.pop()
+            self.render()
+            messagebox.showerror("Velocity", str(exc), parent=self)
 
     def begin_selection_box(self, event):
         """Right-click opens a menu; right-drag on empty space selects a region.
@@ -268,6 +366,7 @@ class PianoRoll(tk.Toplevel):
         width = max(1200, KEYBOARD_WIDTH + int(max_tick / division * PIXELS_PER_BEAT) + 300)
         height = TOP_MARGIN + 128 * NOTE_HEIGHT
         canvas.configure(scrollregion=(0, 0, width, height))
+        self.render_velocity(width)
         for pitch in range(128):
             y = TOP_MARGIN + (127 - pitch) * NOTE_HEIGHT
             white = pitch % 12 not in (1, 3, 6, 8, 10)
@@ -298,6 +397,7 @@ class PianoRoll(tk.Toplevel):
                                     fill=color, outline="#1e40af",
                                     tags=(f"note_{index}", "note"))
         self.canvas.tag_raise("note")
+        self.render_velocity(width)
 
     def hit_note(self):
         x = self.canvas.canvasx(self.winfo_pointerx() - self.canvas.winfo_rootx())
