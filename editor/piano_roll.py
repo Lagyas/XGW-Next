@@ -7,7 +7,7 @@ from collections import defaultdict, deque
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 from midi import MidiError
-from note_ops import insert_note, delete_note, move_note, quantize_notes, resize_note
+from note_ops import insert_note, delete_note, move_note, quantize_notes, resize_note, transform_notes, delete_notes
 
 NOTE_HEIGHT = 12
 PIXELS_PER_BEAT = 64
@@ -49,6 +49,7 @@ class PianoRoll(tk.Toplevel):
         self.geometry("1100x650")
         self.notes = []
         self.selected = None
+        self.selected_pairs = set()
         self.info = tk.StringVar(value="Drag notes to move; drag right edge to resize; double-click to edit.")
         ttk.Label(self, textvariable=self.info).pack(fill="x", padx=8, pady=5)
         area = ttk.Frame(self)
@@ -68,10 +69,14 @@ class PianoRoll(tk.Toplevel):
         self.canvas.bind("<Double-Button-1>", self.edit_note)
         self.bind("<Delete>", lambda event: self.delete_selected())
         self.bind("<Control-z>", self.undo_note_edit)
+        self.bind("<Control-a>", self.select_all_notes)
+        self.bind("<Control-d>", self.duplicate_selected)
         toolbar = ttk.Frame(self)
         toolbar.pack(fill="x", padx=8, pady=4)
         ttk.Button(toolbar, text="Insert note", command=self.insert_note).pack(side="left")
         ttk.Button(toolbar, text="Delete selected", command=self.delete_selected).pack(side="left")
+        ttk.Button(toolbar, text="Select all", command=self.select_all_notes).pack(side="left")
+        ttk.Button(toolbar, text="Duplicate +1 beat", command=self.duplicate_selected).pack(side="left")
         ttk.Button(toolbar, text="Quantize 1/16", command=self.quantize).pack(side="left")
         self.drag_origin = None
         self.render()
@@ -84,6 +89,33 @@ class PianoRoll(tk.Toplevel):
         self.selected = None
         self.render()
         self.info.set("Last MIDI edit undone.")
+
+    def selected_note_pairs(self):
+        return [(on_idx, off_idx) for _, _, _, _, _, on_idx, off_idx in self.notes
+                if (on_idx, off_idx) in self.selected_pairs]
+
+    def select_all_notes(self, _event=None):
+        self.selected_pairs = {(n[5], n[6]) for n in self.notes}
+        self.render()
+        self.info.set(f"{len(self.selected_pairs)} notes selected.")
+        return "break"
+
+    def duplicate_selected(self, _event=None):
+        pairs = self.selected_note_pairs()
+        if not pairs:
+            return "break"
+        try:
+            self.app.snapshot()
+            transform_notes(self.app.song, self.track_index, pairs,
+                            delta_ticks=self.app.song.division, duplicate=True)
+            self.selected_pairs.clear()
+            self.render()
+            self.app.show_events()
+            self.info.set(f"Copied {len(pairs)} notes one beat forward.")
+        except MidiError as exc:
+            self.app.song = self.app.history.pop()
+            messagebox.showerror("Duplicate notes", str(exc), parent=self)
+        return "break"
 
     def render(self):
         canvas = self.canvas
@@ -127,7 +159,7 @@ class PianoRoll(tk.Toplevel):
             x1 = KEYBOARD_WIDTH + start / division * PIXELS_PER_BEAT
             x2 = KEYBOARD_WIDTH + max(end, start + 1) / division * PIXELS_PER_BEAT
             y = TOP_MARGIN + (127 - pitch) * NOTE_HEIGHT
-            color = "#ea580c" if index == self.selected else "#2563eb"
+            color = "#ea580c" if (on_index := self.notes[index][5], self.notes[index][6]) in self.selected_pairs else "#2563eb"
             canvas.create_rectangle(x1, y + 1, max(x1 + 3, x2), y + NOTE_HEIGHT - 1,
                                     fill=color, outline="#1e40af",
                                     tags=(f"note_{index}", "note"))
@@ -181,18 +213,20 @@ class PianoRoll(tk.Toplevel):
             messagebox.showerror("Insert note", str(exc), parent=self)
 
     def delete_selected(self):
-        if self.selected is None or self.selected >= len(self.notes):
+        pairs = self.selected_note_pairs()
+        if not pairs:
             return
-        _, _, _, _, _, on_idx, off_idx = self.notes[self.selected]
         try:
             self.app.snapshot()
-            delete_note(self.app.song, self.track_index, on_idx, off_idx)
+            delete_notes(self.app.song, self.track_index, pairs)
+            self.selected_pairs.clear()
             self.selected = None
             self.render()
             self.app.show_events()
+            self.info.set(f"Deleted {len(pairs)} notes.")
         except MidiError as exc:
             self.app.song = self.app.history.pop()
-            messagebox.showerror("Delete note", str(exc), parent=self)
+            messagebox.showerror("Delete notes", str(exc), parent=self)
 
     def quantize(self):
         try:
@@ -214,6 +248,18 @@ class PianoRoll(tk.Toplevel):
             self.drag_origin = None
             return
         self.selected = index
+        pair = (self.notes[index][5], self.notes[index][6])
+        if event.state & 0x0001:
+            if pair in self.selected_pairs:
+                self.selected_pairs.remove(pair)
+            else:
+                self.selected_pairs.add(pair)
+            self.drag_origin = None
+            self.focus_set()
+            self.render()
+            return
+        if pair not in self.selected_pairs:
+            self.selected_pairs = {pair}
         self.focus_set()
         start, end, _, _, _, _, _ = self.notes[index]
         end_x = KEYBOARD_WIDTH + end / self.app.song.division * PIXELS_PER_BEAT if self.app.song.division > 0 else 0
@@ -270,8 +316,11 @@ class PianoRoll(tk.Toplevel):
             if resizing:
                 resize_note(self.app.song, self.track_index, on_idx, off_idx, new_end)
             else:
-                move_note(self.app.song, self.track_index, on_idx, off_idx, tick, target_pitch)
+                pairs = self.selected_note_pairs()
+                transform_notes(self.app.song, self.track_index, pairs,
+                                delta_ticks=tick - start, delta_pitch=target_pitch - pitch)
             self.selected = None
+            self.selected_pairs.clear()
             self.render()
             self.app.show_events()
             if resizing:
