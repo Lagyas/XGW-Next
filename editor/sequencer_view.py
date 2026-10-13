@@ -20,7 +20,7 @@ def track_spans(song):
     return result
 
 class SequencerView(ttk.Frame):
-    def __init__(self, parent, on_track=None, on_open=None, on_toggle=None, on_instrument=None, on_clip=None):
+    def __init__(self, parent, on_track=None, on_open=None, on_toggle=None, on_instrument=None, on_clip=None, on_drag=None):
         super().__init__(parent)
         self.song = None
         self.on_track = on_track
@@ -28,6 +28,9 @@ class SequencerView(ttk.Frame):
         self.on_toggle = on_toggle
         self.on_instrument = on_instrument
         self.on_clip = on_clip
+        self.on_drag = on_drag
+        self.drag_origin = None
+        self.drag_preview = None
         self.muted = set()
         self.solo = set()
         self.selected_track = 0
@@ -42,6 +45,8 @@ class SequencerView(ttk.Frame):
         self.rowconfigure(0, weight=1)
         self.canvas.bind("<Button-1>", self.click)
         self.canvas.bind("<Double-Button-1>", self.double_click)
+        self.canvas.bind("<B1-Motion>", self.drag_motion)
+        self.canvas.bind("<ButtonRelease-1>", self.drag_release)
         self.draw()
 
     def set_mix(self, muted, solo):
@@ -81,17 +86,63 @@ class SequencerView(ttk.Frame):
             if 185 <= x < 215 and self.on_toggle:
                 self.on_toggle(row, "solo")
                 return
-            if x >= LEFT_WIDTH and self.on_clip and self.song is not None:
+            if x >= LEFT_WIDTH and self.song is not None:
                 tick = int((x - LEFT_WIDTH) / BEAT_WIDTH * self.song.division)
                 for clip_index, (start, end) in enumerate(track_clips(self.song.tracks[row], self.song.division)):
                     if start <= tick <= end:
                         self.selected_track = row
-                        self.on_clip(row, clip_index)
+                        self.drag_origin = (row, clip_index, event.x, event.y, x, self.canvas.canvasy(event.y))
                         return
             self.selected_track = row
             self.draw()
             if self.on_track:
                 self.on_track(row)
+
+    def drag_motion(self, event):
+        if self.drag_origin is None or self.song is None:
+            return
+        row, clip, sx, sy, _, _ = self.drag_origin
+        if abs(event.x - sx) + abs(event.y - sy) < 5:
+            return
+        self.canvas.delete("drag-preview")
+        clips = track_clips(self.song.tracks[row], self.song.division)
+        if clip >= len(clips):
+            return
+        start, end = clips[clip]
+        dx = event.x - sx
+        target_row = self._row_at(event)
+        if target_row is None:
+            return
+        y = HEADER_HEIGHT + target_row * ROW_HEIGHT
+        x1 = LEFT_WIDTH + start / self.song.division * BEAT_WIDTH + dx
+        x2 = LEFT_WIDTH + end / self.song.division * BEAT_WIDTH + dx
+        self.canvas.create_rectangle(x1, y + 8, max(x1 + 8, x2), y + ROW_HEIGHT - 8,
+                                     outline="#ea580c", width=2, dash=(4, 3),
+                                     tags="drag-preview")
+
+    def drag_release(self, event):
+        if self.drag_origin is None:
+            return
+        row, clip, sx, sy, _, _ = self.drag_origin
+        self.drag_origin = None
+        self.canvas.delete("drag-preview")
+        if abs(event.x - sx) + abs(event.y - sy) < 5:
+            if self.on_clip:
+                self.on_clip(row, clip)
+            return
+        if self.song is None or self.on_drag is None:
+            return
+        target = self._row_at(event)
+        if target is None:
+            return
+        # Snap to the nearest quarter-note (beat).
+        beats = round((event.x - sx) / BEAT_WIDTH)
+        delta = beats * self.song.division
+        if delta == 0 and target == row:
+            return
+        # Windows Ctrl key is 0x0004 in Tk state.
+        duplicate = bool(event.state & 0x0004)
+        self.on_drag(row, clip, target, delta, duplicate)
 
     def double_click(self, event):
         row = self._row_at(event)
