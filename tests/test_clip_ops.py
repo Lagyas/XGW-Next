@@ -29,6 +29,38 @@ class ClipOpsTests(unittest.TestCase):
         self.assertEqual(edit_clip(s, 0, 0, 480, True), 1)
         self.assertEqual(len(paired_notes(s.tracks[0])), 3)
 
+    def test_copy_to_another_track(self):
+        s = song()
+        s.tracks.append(Track([]))
+        count = edit_clip(s, 0, 0, 480, duplicate=True, destination_track=1)
+        self.assertEqual(count, 1)
+        self.assertEqual(len(paired_notes(s.tracks[0])), 2)
+        self.assertEqual(len(paired_notes(s.tracks[1])), 1)
+        self.assertEqual([e.tick for e in s.tracks[1].events], [480, 720])
+
+    def test_move_to_another_track(self):
+        s = song()
+        s.tracks.append(Track([]))
+        count = edit_clip(s, 0, 0, 0, destination_track=1)
+        self.assertEqual(count, 1)
+        self.assertEqual(len(paired_notes(s.tracks[0])), 1)
+        self.assertEqual(len(paired_notes(s.tracks[1])), 1)
+        self.assertEqual([e.tick for e in s.tracks[1].events], [0, 240])
+
+    def test_invalid_destination_does_not_mutate(self):
+        s = song()
+        with self.assertRaises(MidiError):
+            edit_clip(s, 0, 0, 480, destination_track=5)
+        self.assertFalse(s.dirty)
+
+    def test_end_of_track_after_move(self):
+        s = song()
+        s.tracks[0].events.append(Event(2640, 0xff, b"", 0x2f, 5))
+        edit_clip(s, 0, 1, 960)
+        restored = Song.from_bytes(s.to_bytes())
+        self.assertEqual(restored.tracks[0].events[-1].meta_type, 0x2f)
+        self.assertEqual(restored.tracks[0].events[-1].tick, 3600)
+
     def test_negative_offset_rejected_without_changes(self):
         s = song()
         with self.assertRaises(MidiError):
