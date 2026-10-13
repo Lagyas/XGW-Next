@@ -74,7 +74,7 @@ class App:
         ttk.Button(transport_bar, text="Open MIDI...", command=self.open_file).pack(side="left", padx=10)
         ttk.Button(transport_bar, text="Save As...", command=self.save_as).pack(side="left", padx=3)
         ttk.Button(transport_bar, text="MIDI output...", command=self.choose_output).pack(side="left", padx=10)
-        self.sequencer = SequencerView(self.root, on_track=self.select_sequencer_track, on_open=self.open_sequencer_track, on_toggle=self.toggle_track_state)
+        self.sequencer = SequencerView(self.root, on_track=self.select_sequencer_track, on_open=self.open_sequencer_track, on_toggle=self.toggle_track_state, on_instrument=self.edit_track_voice)
         self.sequencer.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
         outer = ttk.Panedwindow(self.root, orient=tk.HORIZONTAL)
         outer.pack(fill=tk.BOTH, expand=False, padx=8, pady=8)
