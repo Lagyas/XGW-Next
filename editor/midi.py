@@ -111,7 +111,16 @@ class Song:
             for at,typ,payload in self.extra_chunks:
                 if at==i: out+=typ+struct.pack('>I',len(payload))+payload
             body=bytearray(); last=0
-            for ev in sorted(track.events,key=lambda e:(e.tick,e.order)):
+            # End-of-Track must be last, even when editing extends the song.
+            endings = [e for e in track.events if e.status == 0xff and e.meta_type == 0x2f]
+            ordinary = [e for e in track.events if not (e.status == 0xff and e.meta_type == 0x2f)]
+            events = sorted(ordinary, key=lambda e: (e.tick, e.order))
+            if endings:
+                final_tick = max(max((e.tick for e in events), default=0),
+                                 max(e.tick for e in endings))
+                events.append(Event(final_tick, 0xff, b"", 0x2f,
+                                    max((e.order for e in events), default=-1) + 1))
+            for ev in events:
                 if ev.tick<last: raise MidiError('Invalid event ordering')
                 body+=vlq_write(ev.tick-last); last=ev.tick
                 body.append(ev.status)
