@@ -7,7 +7,7 @@ from collections import defaultdict, deque
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 from midi import MidiError
-from note_ops import insert_note, delete_note, move_note, quantize_notes, resize_note, transform_notes, delete_notes
+from note_ops import insert_note, delete_note, move_note, quantize_notes, quantize_selected_notes, resize_note, transform_notes, delete_notes
 from velocity_ops import set_note_velocities
 from meter_grid import grid_lines
 from snap_grid import SNAP_OPTIONS, snapped_tick
@@ -473,13 +473,18 @@ class PianoRoll(tk.Toplevel):
             return
         try:
             self.app.snapshot()
-            count = quantize_notes(self.app.song, self.track_index, int(option.split("/")[1]))
+            pairs = self.selected_note_pairs()
+            if pairs:
+                count = quantize_selected_notes(self.app.song, self.track_index, pairs,
+                                                int(option.split("/")[1]))
+            else:
+                count = quantize_notes(self.app.song, self.track_index, int(option.split("/")[1]))
             if count == 0:
                 self.app.history.pop()
             self.selected = None
             self.render()
             self.app.show_events()
-            self.info.set(f"Quantized {count} notes to {option}.")
+            self.info.set(f"Quantized {count} notes to {option} ({\u0027selection\u0027 if pairs else \u0027entire track\u0027}).")
         except MidiError as exc:
             self.app.song = self.app.history.pop()
             messagebox.showerror("Quantize", str(exc), parent=self)
