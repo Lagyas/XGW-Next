@@ -4,6 +4,8 @@ GM/XG bank 0 names are generic GM instrument names. XG variations are
 device-dependent; unknown combinations are never silently claimed supported.
 MIDI program is zero-based; human-readable display is one-based.
 """
+from xg_drums import kit_name, kit_records
+
 GM_NAMES = (
 "Acoustic Grand Piano","Bright Acoustic Piano","Electric Grand Piano","Honky-tonk Piano",
 "Electric Piano 1","Electric Piano 2","Harpsichord","Clavi",
@@ -51,6 +53,9 @@ def voice_name(msb, lsb, program):
     """Return known name or None; never assume a variation exists."""
     if not all(isinstance(v, int) and 0 <= v <= 127 for v in (msb, lsb, program)):
         raise ValueError("MIDI bank and program values must be 0..127")
+    drum = kit_name(msb, lsb, program)
+    if drum is not None:
+        return drum
     if msb == 0 and lsb == 0:
         return GM_NAMES[program]
     return XG_VARIATIONS.get((msb, lsb, program))
@@ -63,6 +68,7 @@ def matching_voices(search="", msb=None, lsb=None):
     """Return sorted (msb, lsb, program, name) tuples for curated voices."""
     records = [(0, 0, i, name) for i, name in enumerate(GM_NAMES)]
     records += [(a, b, p, name) for (a, b, p), name in XG_VARIATIONS.items()]
+    records += kit_records()
     term = search.casefold().strip()
     return sorted((a, b, p, name) for a, b, p, name in records
                   if (msb is None or msb == a) and (lsb is None or lsb == b)
