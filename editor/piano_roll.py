@@ -66,6 +66,8 @@ class PianoRoll(tk.Toplevel):
         self.canvas.bind("<B1-Motion>", self.drag_motion)
         self.canvas.bind("<ButtonRelease-1>", self.end_drag)
         self.canvas.bind("<Double-Button-1>", self.edit_note)
+        self.bind("<Delete>", lambda event: self.delete_selected())
+        self.bind("<Control-z>", self.undo_note_edit)
         toolbar = ttk.Frame(self)
         toolbar.pack(fill="x", padx=8, pady=4)
         ttk.Button(toolbar, text="Insert note", command=self.insert_note).pack(side="left")
@@ -74,6 +76,14 @@ class PianoRoll(tk.Toplevel):
         self.drag_origin = None
         self.render()
         self.canvas.yview_moveto(0.32)
+
+    def undo_note_edit(self, _event=None):
+        if not self.app.history:
+            return
+        self.app.undo()
+        self.selected = None
+        self.render()
+        self.info.set("Last MIDI edit undone.")
 
     def render(self):
         canvas = self.canvas
@@ -204,6 +214,7 @@ class PianoRoll(tk.Toplevel):
             self.drag_origin = None
             return
         self.selected = index
+        self.focus_set()
         start, end, _, _, _, _, _ = self.notes[index]
         end_x = KEYBOARD_WIDTH + end / self.app.song.division * PIXELS_PER_BEAT if self.app.song.division > 0 else 0
         resizing = abs(self.canvas.canvasx(event.x) - end_x) <= 7
