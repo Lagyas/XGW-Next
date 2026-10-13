@@ -162,7 +162,6 @@ class PianoRoll(tk.Toplevel):
     def velocity_motion(self, event):
         if self.velocity_drag is None:
             return
-        _, _ = self.velocity_drag
         self.info.set(f"Velocity: {self.velocity_value(event)} (release to apply)")
 
     def velocity_release(self, event):
@@ -366,7 +365,6 @@ class PianoRoll(tk.Toplevel):
         width = max(1200, KEYBOARD_WIDTH + int(max_tick / division * PIXELS_PER_BEAT) + 300)
         height = TOP_MARGIN + 128 * NOTE_HEIGHT
         canvas.configure(scrollregion=(0, 0, width, height))
-        self.render_velocity(width)
         for pitch in range(128):
             y = TOP_MARGIN + (127 - pitch) * NOTE_HEIGHT
             white = pitch % 12 not in (1, 3, 6, 8, 10)
