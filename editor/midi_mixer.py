@@ -34,7 +34,7 @@ class MidiMixer(tk.Toplevel):
                 ttk.Label(frame, text=name, font=("Arial", 8)).pack()
                 variable = tk.IntVar()
                 ttk.Scale(frame, from_=127, to=0, orient="vertical",
-                          variable=variable, length=125).pack()
+                          variable=variable, length=42).pack()
                 ttk.Label(frame, textvariable=variable, width=4,
                           anchor="center").pack()
                 variables[name] = variable
