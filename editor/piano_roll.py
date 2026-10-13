@@ -429,7 +429,7 @@ class PianoRoll(tk.Toplevel):
     def end_drag(self, event):
         if self.drag_origin is None:
             return
-        index, old_x, old_y = self.drag_origin
+        index, old_x, old_y, resizing = self.drag_origin
         self.drag_origin = None
         self.canvas.delete("note-preview")
         if index >= len(self.notes) or self.app.song.division & 0x8000:
