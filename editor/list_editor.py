@@ -18,7 +18,7 @@ class ListEditor(tk.Toplevel):
         ttk.Label(header, text="Event filter:").pack(side="left")
         filter_box = ttk.Combobox(header, state="readonly", textvariable=self.filter,
                                   values=("All events", "Notes", "Control changes",
-                                          "Program changes", "Pitch bend", "Meta", "SysEx"),
+                                          "Program changes", "Pitch bend", "Aftertouch", "Meta", "SysEx"),
                                   width=21)
         filter_box.pack(side="left", padx=8)
         filter_box.bind("<<ComboboxSelected>>", lambda _: self.refresh())
@@ -55,11 +55,14 @@ class ListEditor(tk.Toplevel):
             return event.status & 0xf0 == 0xc0 and event.status < 0xf0
         if kind == "Pitch bend":
             return event.status & 0xf0 == 0xe0 and event.status < 0xf0
+        if kind == "Aftertouch":
+            return event.status < 0xf0 and event.status & 0xf0 in (0xa0, 0xd0)
         if kind == "Meta":
             return event.status == 0xff
         return event.status in (0xf0, 0xf7)
 
     def refresh(self):
+        previous = self.selected_index()
         self.events.delete(*self.events.get_children())
         if self.app.song is None or self.track_index >= len(self.app.song.tracks):
             return
@@ -68,6 +71,9 @@ class ListEditor(tk.Toplevel):
             if self.matches(event):
                 self.events.insert("", "end", iid=str(index), values=(
                     event.tick, event.channel() or "-", event.label(), event.description()))
+        if previous is not None and self.events.exists(str(previous)):
+            self.events.selection_set(str(previous))
+            self.events.see(str(previous))
 
     def selected_index(self):
         selection = self.events.selection()
