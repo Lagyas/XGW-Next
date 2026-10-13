@@ -31,6 +31,7 @@ class SequencerView(ttk.Frame):
         self.on_drag = on_drag
         self.drag_origin = None
         self.drag_preview = None
+        self.suppress_release = False
         self.muted = set()
         self.solo = set()
         self.selected_track = 0
@@ -81,11 +82,11 @@ class SequencerView(ttk.Frame):
         row = self._row_at(event)
         if row is not None:
             x = self.canvas.canvasx(event.x)
-            if 0 <= x < 150 and self.on_instrument and event.y > 0:
+            if 0 <= x < 150:
                 self.selected_track = row
+                self.draw()
                 if self.on_track:
                     self.on_track(row)
-                self.on_instrument(row)
                 return
             if 155 <= x < 185 and self.on_toggle:
                 self.on_toggle(row, "mute")
@@ -128,14 +129,21 @@ class SequencerView(ttk.Frame):
                                      tags="drag-preview")
 
     def drag_release(self, event):
+        if self.suppress_release:
+            self.suppress_release = False
+            self.drag_origin = None
+            self.canvas.delete("drag-preview")
+            return
         if self.drag_origin is None:
             return
         row, clip, sx, sy, _, _ = self.drag_origin
         self.drag_origin = None
         self.canvas.delete("drag-preview")
         if abs(event.x - sx) + abs(event.y - sy) < 5:
-            if self.on_clip:
-                self.on_clip(row, clip)
+            self.selected_track = row
+            self.draw()
+            if self.on_track:
+                self.on_track(row)
             return
         if self.song is None or self.on_drag is None:
             return
@@ -154,6 +162,9 @@ class SequencerView(ttk.Frame):
     def double_click(self, event):
         row = self._row_at(event)
         if row is not None and self.on_open:
+            self.suppress_release = True
+            self.drag_origin = None
+            self.canvas.delete("drag-preview")
             self.on_open(row)
 
     def draw(self):
