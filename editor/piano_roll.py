@@ -525,8 +525,9 @@ class PianoRoll(tk.Toplevel):
         if resizing:
             tick = start
             target_pitch = pitch
-            new_end = max(start + 1, snapped_tick(max(0, round(end + dx * self.app.song.division / PIXELS_PER_BEAT)),
-                                                    self.app.song.division, self.snap_option.get()))
+            new_end = (end if abs(dx) < 2 else
+                       max(start + 1, snapped_tick(max(0, round(end + dx * self.app.song.division / PIXELS_PER_BEAT)),
+                                                   self.app.song.division, self.snap_option.get())))
             x2 = KEYBOARD_WIDTH + new_end / self.app.song.division * PIXELS_PER_BEAT
         else:
             x2 = KEYBOARD_WIDTH + (tick + end - start) / self.app.song.division * PIXELS_PER_BEAT
