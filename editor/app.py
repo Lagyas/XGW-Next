@@ -12,6 +12,7 @@ from sequencer_view import SequencerView
 from track_voice import used_channels, channel_voice_at
 from xg_voices import voice_label, matching_voices
 from voice_setup import insert_voice_setup
+from clip_ops import edit_clip
 
 THEMES = {
     "Classic": ("#ece9d8", "#000000", "#ffffff"),
@@ -74,7 +75,7 @@ class App:
         ttk.Button(transport_bar, text="Open MIDI...", command=self.open_file).pack(side="left", padx=10)
         ttk.Button(transport_bar, text="Save As...", command=self.save_as).pack(side="left", padx=3)
         ttk.Button(transport_bar, text="MIDI output...", command=self.choose_output).pack(side="left", padx=10)
-        self.sequencer = SequencerView(self.root, on_track=self.select_sequencer_track, on_open=self.open_sequencer_track, on_toggle=self.toggle_track_state, on_instrument=self.edit_track_voice)
+        self.sequencer = SequencerView(self.root, on_track=self.select_sequencer_track, on_open=self.open_sequencer_track, on_toggle=self.toggle_track_state, on_instrument=self.edit_track_voice, on_clip=self.edit_sequencer_clip)
         self.sequencer.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
         outer = ttk.Panedwindow(self.root, orient=tk.HORIZONTAL)
         outer.pack(fill=tk.BOTH, expand=False, padx=8, pady=8)
@@ -101,6 +102,47 @@ class App:
         self.events.bind("<Double-1>", lambda _: self.edit_event())
         self.status = tk.StringVar(value="Open a MIDI file to begin.")
         ttk.Label(self.root, textvariable=self.status).pack(fill=tk.X, padx=8, pady=(0, 6))
+
+    def edit_sequencer_clip(self, track_index, clip_index):
+        if self.player.playing:
+            messagebox.showwarning("MIDI clip", "Stop playback before editing.")
+            return
+        if self.song is None:
+            return
+        self.select_sequencer_track(track_index)
+        dialog = tk.Toplevel(self.root)
+        dialog.title(f"Track {track_index+1} / Clip {clip_index+1}")
+        dialog.geometry("370x195")
+        dialog.transient(self.root)
+        ttk.Label(dialog, text="Move or duplicate MIDI notes by a number of beats."
+                  ).pack(pady=(12, 6))
+        ttk.Label(dialog, text="Controllers, SysEx and tempo are not moved."
+                  ).pack(pady=2)
+        beats = tk.IntVar(value=4)
+        line = ttk.Frame(dialog)
+        line.pack(pady=10)
+        ttk.Label(line, text="Offset in beats:").pack(side="left")
+        ttk.Spinbox(line, from_=-999, to=999, textvariable=beats, width=8).pack(side="left", padx=8)
+        actions = ttk.Frame(dialog)
+        actions.pack(pady=5)
+        def apply(duplicate):
+            try:
+                delta = beats.get() * self.song.division
+                if delta == 0:
+                    raise MidiError("Choose a non-zero beat offset")
+                self.snapshot()
+                count = edit_clip(self.song, track_index, clip_index, delta, duplicate)
+            except (MidiError, tk.TclError) as exc:
+                if self.history:
+                    self.history.pop()
+                messagebox.showerror("MIDI clip", str(exc), parent=dialog)
+                return
+            self.sequencer.draw()
+            self.show_events()
+            self.status.set(f"{'Copied' if duplicate else 'Moved'} {count} MIDI notes; Save As to save.")
+            dialog.destroy()
+        ttk.Button(actions, text="Move", command=lambda: apply(False)).pack(side="left", padx=6)
+        ttk.Button(actions, text="Duplicate", command=lambda: apply(True)).pack(side="left", padx=6)
 
     def edit_track_voice(self, index):
         if self.song is None or not 0 <= index < len(self.song.tracks):
