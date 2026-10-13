@@ -55,6 +55,8 @@ class ControllerEditor(tk.Toplevel):
         self.graph.bind("<ButtonPress-1>", self.graph_press)
         self.graph.bind("<B1-Motion>", self.graph_motion)
         self.graph.bind("<ButtonRelease-1>", self.graph_release)
+        self.graph.bind("<Button-3>", self.graph_context_menu)
+        self.graph.bind("<Configure>", lambda _: self.draw_graph())
         self.graph_channel.trace_add("write", lambda *_: self.draw_graph())
         self.graph_cc.trace_add("write", lambda *_: self.draw_graph())
         buttons = ttk.Frame(self)
@@ -245,3 +247,22 @@ class ControllerEditor(tk.Toplevel):
         except MidiError as exc:
             messagebox.showerror("Controller graph", str(exc), parent=self)
             self.draw_graph()
+
+    def graph_context_menu(self, event):
+        selected = self.graph_filter()
+        if selected is None:
+            return
+        hits = self.graph.find_overlapping(event.x - 7, event.y - 7,
+                                           event.x + 7, event.y + 7)
+        for item in reversed(hits):
+            for tag in self.graph.gettags(item):
+                if tag.startswith("cc_"):
+                    self.event_index = int(tag[3:])
+                    menu = tk.Menu(self, tearoff=0)
+                    menu.add_command(label="Delete controller point",
+                                     command=self.delete)
+                    try:
+                        menu.tk_popup(event.x_root, event.y_root)
+                    finally:
+                        menu.grab_release()
+                    return
