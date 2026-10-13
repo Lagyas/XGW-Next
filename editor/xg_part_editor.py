@@ -4,10 +4,11 @@ Changes are sent only after explicit confirmation and an output selection.
 The UI displays 1-based program numbers; XG messages use 0-based values.
 """
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, simpledialog
 from midi import MidiError
 from xg_parts import XGParts, PART_FIELDS
 from xg_voices import voice_label, matching_voices
+from voice_setup import insert_voice_setup
 
 LABELS = {
     "bank_msb": "Bank MSB", "bank_lsb": "Bank LSB",
@@ -45,6 +46,8 @@ class XGPartEditor(tk.Toplevel):
         for key in ("bank_msb", "bank_lsb", "program"):
             self.vars[key].trace_add("write", lambda *_: self.update_voice_label())
         self.update_voice_label()
+        ttk.Button(self, text="Insert bank/program into selected MIDI track",
+                   command=self.insert_into_song).pack(pady=4)
         ttk.Button(self, text="Send Part settings to MIDI output",
                    command=self.send).pack(pady=12)
         ttk.Label(self, text="Sends Yamaha XG SysEx to the selected output.\n"
@@ -105,6 +108,33 @@ class XGPartEditor(tk.Toplevel):
         part = self.model.parts[index]
         for name in PART_FIELDS:
             self.vars[name].set(getattr(part, name))
+
+    def insert_into_song(self):
+        if self.app.song is None or self.app.selected_track() is None:
+            messagebox.showinfo("Insert voice", "Open a MIDI song and select a track first.", parent=self)
+            return
+        channel = simpledialog.askinteger("MIDI channel", "Insert bank/program on MIDI channel (1–16):",
+                                          initialvalue=1, minvalue=1, maxvalue=16, parent=self)
+        if channel is None:
+            return
+        try:
+            values = [self.vars[name].get() for name in ("bank_msb", "bank_lsb", "program")]
+            if any(not 0 <= value <= 127 for value in values):
+                raise MidiError("Bank and program must be 0–127")
+            track = self.app.selected_track()
+            if not messagebox.askyesno("Insert voice", "Add three MIDI messages at tick 0 to the selected track?\\n"
+                                       "Existing bank/program events will be preserved.", parent=self):
+                return
+            self.app.snapshot()
+            insert_voice_setup(self.app.song, track, channel, *values)
+            self.app.show_events()
+            self.app.status.set("Inserted MIDI bank/program messages — use Save As.")
+            messagebox.showinfo("Insert voice", "Bank MSB, Bank LSB and Program Change inserted.", parent=self)
+        except (ValueError, tk.TclError, MidiError) as exc:
+            if self.app.history:
+                self.app.song = self.app.history.pop()
+                self.app.refresh()
+            messagebox.showerror("Insert voice", str(exc), parent=self)
 
     def send(self):
         port_name = self.app.output_name.get()
