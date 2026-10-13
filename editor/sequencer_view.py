@@ -1,5 +1,7 @@
 """Arrangement overview for a MIDI song, grouped by track and time."""
 import tkinter as tk
+from track_voice import used_channels, channel_voice_at
+from xg_voices import voice_label
 from tkinter import ttk
 from arrangement import track_clips
 
@@ -18,12 +20,13 @@ def track_spans(song):
     return result
 
 class SequencerView(ttk.Frame):
-    def __init__(self, parent, on_track=None, on_open=None, on_toggle=None):
+    def __init__(self, parent, on_track=None, on_open=None, on_toggle=None, on_instrument=None):
         super().__init__(parent)
         self.song = None
         self.on_track = on_track
         self.on_open = on_open
         self.on_toggle = on_toggle
+        self.on_instrument = on_instrument
         self.muted = set()
         self.solo = set()
         self.selected_track = 0
@@ -65,6 +68,12 @@ class SequencerView(ttk.Frame):
         row = self._row_at(event)
         if row is not None:
             x = self.canvas.canvasx(event.x)
+            if 0 <= x < 150 and self.on_instrument and event.y > 0:
+                self.selected_track = row
+                if self.on_track:
+                    self.on_track(row)
+                self.on_instrument(row)
+                return
             if 155 <= x < 185 and self.on_toggle:
                 self.on_toggle(row, "mute")
                 return
@@ -113,8 +122,13 @@ class SequencerView(ttk.Frame):
                                outline="#cbd5e1")
             c.create_text(10, y + 15, anchor="w", text=f"{index+1:02d}  {track.name()[:26]}")
             channels = sorted({(e.status & 15) + 1 for e in track.events if 0x80 <= e.status <= 0xef})
-            c.create_text(10, y + 31, anchor="w",
-                          text="CH " + (", ".join(map(str, channels)) if channels else "—"),
+            if channels:
+                channel = channels[0]
+                voice = channel_voice_at(self.song, index, channel)
+                subtitle = f"CH {channel} · {voice_label(voice.msb, voice.lsb, voice.program)}"
+            else:
+                subtitle = "CH — · no instrument"
+            c.create_text(10, y + 31, anchor="w", text=subtitle[:23],
                           fill="#475569", font=("Arial", 9))
             for x, name, active in ((155, "M", index in self.muted),
                                     (185, "S", index in self.solo)):
