@@ -28,6 +28,24 @@ class MixerOpsTests(unittest.TestCase):
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].data[1], 90)
 
+    def test_changed_channel_does_not_touch_other_channels(self):
+        set_channel_values(self.song, 0, 1, {"Volume": 66}, 0)
+        before = len(self.song.tracks[0].events)
+        set_channel_values(self.song, 0, 1, {"Pan": 20}, 0)
+        self.assertEqual(len(self.song.tracks[0].events), before + 1)
+        self.assertEqual(channel_values(self.song, 1)["Volume"], 66)
+        self.assertEqual(channel_values(self.song, 1)["Pan"], 20)
+        self.assertEqual(channel_values(self.song, 2)["Volume"], 100)
+        self.assertFalse(any(e.status == 0xb1 for e in self.song.tracks[0].events))
+
+    def test_edit_does_not_change_unrelated_tracks(self):
+        self.song.tracks.append(Track([Event(0, 0xb1, bytes((7, 45)), order=0)]))
+        other_before = [(e.tick, e.status, e.data) for e in self.song.tracks[1].events]
+        set_channel_values(self.song, 0, 1, {"Chorus": 33}, 120)
+        self.assertEqual(
+            [(e.tick, e.status, e.data) for e in self.song.tracks[1].events],
+            other_before)
+
     def test_reject_invalid_without_changes(self):
         before = len(self.song.tracks[0].events)
         with self.assertRaises(MidiError):
