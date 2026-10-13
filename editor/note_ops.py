@@ -68,6 +68,9 @@ def insert_note(song, track_index, tick, duration, pitch, velocity=100, channel=
     track = song.tracks[track_index]
     order = max((e.order for e in track.events), default=-1) + 1
     ch = channel - 1
+    for e in track.events:
+        if e.status == 0xff and e.meta_type == 0x2f and e.tick < tick + duration:
+            e.tick = tick + duration
     track.events.extend((
         Event(tick, 0x90 | ch, bytes((pitch, velocity)), order=order),
         Event(tick + duration, 0x80 | ch, bytes((pitch, 0)), order=order + 1),
