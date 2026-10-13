@@ -6,6 +6,7 @@ Timing uses monotonic clock and a worker thread; stop sends All Notes Off.
 import threading
 import time
 from midi import MidiError
+from xg_sysex import smf_sysex_to_wire
 
 def available_outputs():
     try:
@@ -17,10 +18,10 @@ def available_outputs():
     except Exception as exc:
         raise MidiError(f"Cannot enumerate MIDI outputs: {exc}") from exc
 
-def timed_messages(song):
+def timed_messages(song, include_sysex=False):
     """Yield (seconds, MIDI bytes), with tempo map taken from all tracks.
 
-    Supports PPQN SMF 0/1. Excludes SysEx/meta and other non-channel events.
+    Supports PPQN SMF 0/1. Optionally emits complete F0 SysEx messages.\n    Incomplete or F7 continuation SysEx is skipped (not reconstructed).
     Stable ordering follows tick, track, event order.
     """
     if song.division & 0x8000 or song.division <= 0:
@@ -42,6 +43,10 @@ def timed_messages(song):
             new_tempo = int.from_bytes(ev.data, "big")
             if new_tempo > 0:
                 tempo = new_tempo
+        elif include_sysex and ev.status == 0xf0:
+            raw = smf_sysex_to_wire(ev.status, ev.data)
+            if raw is not None:
+                yield seconds, raw
         elif 0x80 <= ev.status <= 0xef:
             yield seconds, bytes((ev.status,)) + ev.data
 
@@ -57,13 +62,13 @@ class MidiPlayer:
     def playing(self):
         return self._thread is not None and self._thread.is_alive()
 
-    def play(self, song, port_name):
+    def play(self, song, port_name, include_sysex=False):
         if self.playing:
             raise MidiError("Playback is already active")
         if not port_name:
             raise MidiError("Choose a MIDI output")
         # Copy the event timeline before starting the worker thread.
-        timeline = list(timed_messages(song))
+        timeline = list(timed_messages(song, include_sysex=include_sysex))
         self._stop.clear()
         self._thread = threading.Thread(target=self._run, args=(timeline, port_name), daemon=True)
         self._thread.start()
@@ -84,7 +89,10 @@ class MidiPlayer:
                     break
                 if self._stop.is_set():
                     break
-                port.send(mido.Message.from_bytes(list(payload)))
+                if payload[0] == 0xf0:
+                    port.send(mido.Message('sysex', data=list(payload[1:-1])))
+                else:
+                    port.send(mido.Message.from_bytes(list(payload)))
         except Exception as exc:
             if self.on_error:
                 self.on_error(str(exc))
