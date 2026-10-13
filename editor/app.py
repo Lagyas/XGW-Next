@@ -62,6 +62,13 @@ class App:
         menu.add_cascade(label='Transport', menu=transport_menu)
         self.root.config(menu=menu)
 
+        transport_bar = ttk.Frame(self.root)
+        transport_bar.pack(fill=tk.X, padx=8, pady=(6, 0))
+        ttk.Button(transport_bar, text="▶ Play", command=self.play_midi).pack(side="left", padx=3)
+        ttk.Button(transport_bar, text="■ Stop", command=self.stop_midi).pack(side="left", padx=3)
+        ttk.Button(transport_bar, text="Open MIDI...", command=self.open_file).pack(side="left", padx=10)
+        ttk.Button(transport_bar, text="Save As...", command=self.save_as).pack(side="left", padx=3)
+        ttk.Button(transport_bar, text="MIDI output...", command=self.choose_output).pack(side="left", padx=10)
         self.sequencer = SequencerView(self.root, on_track=self.select_sequencer_track, on_open=self.open_sequencer_track)
         self.sequencer.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
         outer = ttk.Panedwindow(self.root, orient=tk.HORIZONTAL)
