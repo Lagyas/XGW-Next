@@ -11,6 +11,7 @@ from drum_editor import DrumEditor
 from controller_editor import ControllerEditor
 from list_editor import ListEditor
 from master_track_editor import MasterTrackEditor
+from midi_mixer import MidiMixer
 from sequencer_view import SequencerView
 from track_voice import used_channels, channel_voice_at
 from xg_voices import voice_label, matching_voices
@@ -58,6 +59,7 @@ class App:
         view_menu.add_command(label="Piano Roll (selected track)...", command=self.open_piano_roll)
         view_menu.add_command(label="List Editor (selected track)...", command=self.open_list_editor)
         view_menu.add_command(label="Master Track (Tempo / Time Signature)...", command=self.open_master_track)
+        view_menu.add_command(label="MIDI Mixer (16 channels)...", command=self.open_midi_mixer)
         double_click_menu = tk.Menu(view_menu, tearoff=0)
         for editor_name in ("Piano Roll", "List Editor", "Drum Editor"):
             double_click_menu.add_radiobutton(label=editor_name, variable=self.track_double_click_editor,
@@ -467,6 +469,12 @@ class App:
 
     def open_xg_editor(self):
         XGPartEditor(self)
+
+    def open_midi_mixer(self):
+        if self.song is None:
+            messagebox.showinfo("MIDI Mixer", "Open a MIDI file first.")
+            return
+        MidiMixer(self)
 
     def open_master_track(self):
         if self.song is None:
