@@ -23,6 +23,7 @@ class App:
         self.history = []
         self.player = MidiPlayer(on_state=self.playback_state, on_error=self.playback_error)
         self.output_name = tk.StringVar(value='')
+        self.send_sysex = tk.BooleanVar(value=False)
         self.theme = tk.StringVar(value="Classic")
         self.make_ui()
         self.root.protocol("WM_DELETE_WINDOW", self.close_app)
@@ -50,6 +51,7 @@ class App:
         menu.add_cascade(label="Appearance", menu=theme_menu)
         transport_menu = tk.Menu(menu, tearoff=0)
         transport_menu.add_command(label='Choose MIDI output...', command=self.choose_output)
+        transport_menu.add_checkbutton(label='Send complete SysEx (advanced)', variable=self.send_sysex)
         transport_menu.add_command(label='Play', command=self.play_midi)
         transport_menu.add_command(label='Stop', command=self.stop_midi)
         menu.add_cascade(label='Transport', menu=transport_menu)
@@ -124,7 +126,7 @@ class App:
             messagebox.showinfo('MIDI playback', 'Open a MIDI file first.')
             return
         try:
-            self.player.play(self.song, self.output_name.get())
+            self.player.play(self.song, self.output_name.get(), include_sysex=self.send_sysex.get())
         except MidiError as exc:
             messagebox.showerror('MIDI playback', str(exc))
 
