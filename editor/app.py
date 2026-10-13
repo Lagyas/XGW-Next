@@ -9,6 +9,9 @@ from midi_output import MidiPlayer, available_outputs
 from xg_part_editor import XGPartEditor
 from drum_editor import DrumEditor
 from sequencer_view import SequencerView
+from track_voice import used_channels, channel_voice_at
+from xg_voices import voice_label, matching_voices
+from voice_setup import insert_voice_setup
 
 THEMES = {
     "Classic": ("#ece9d8", "#000000", "#ffffff"),
@@ -98,6 +101,55 @@ class App:
         self.events.bind("<Double-1>", lambda _: self.edit_event())
         self.status = tk.StringVar(value="Open a MIDI file to begin.")
         ttk.Label(self.root, textvariable=self.status).pack(fill=tk.X, padx=8, pady=(0, 6))
+
+    def edit_track_voice(self, index):
+        if self.song is None or not 0 <= index < len(self.song.tracks):
+            return
+        if self.player.playing:
+            messagebox.showwarning("Track voice", "Stop playback before editing.")
+            return
+        channels = used_channels(self.song, index)
+        channel = channels[0] if channels else 1
+        if len(channels) > 1:
+            channel = simpledialog.askinteger("MIDI channel",
+                "Track uses channels " + ", ".join(map(str, channels)) +
+                ". Which channel do you want to edit?",
+                initialvalue=channel, minvalue=1, maxvalue=16, parent=self.root)
+            if channel is None:
+                return
+        voice = channel_voice_at(self.song, index, channel, tick=0)
+        picker = tk.Toplevel(self.root)
+        picker.title(f"Track {index+1} / MIDI Channel {channel} — Instrument")
+        picker.geometry("610x480")
+        ttk.Label(picker, text=f"Current: {voice_label(voice.msb, voice.lsb, voice.program)}"
+                  ).pack(anchor="w", padx=12, pady=8)
+        ttk.Label(picker, text="Search GM / Yamaha XG instruments:").pack(anchor="w", padx=12)
+        search = tk.StringVar()
+        ttk.Entry(picker, textvariable=search).pack(fill="x", padx=12, pady=5)
+        items = tk.Listbox(picker)
+        items.pack(fill="both", expand=True, padx=12, pady=8)
+        records = []
+        def refresh(*_):
+            records[:] = matching_voices(search.get())
+            items.delete(0, "end")
+            for msb, lsb, program, name in records:
+                items.insert("end", f"{name}   [MSB {msb}, LSB {lsb}, Program {program+1}]")
+        search.trace_add("write", refresh)
+        refresh()
+        def choose(_=None):
+            selected = items.curselection()
+            if not selected:
+                return
+            msb, lsb, program, name = records[selected[0]]
+            self.snapshot()
+            insert_voice_setup(self.song, index, channel, msb, lsb, program)
+            self.sequencer.draw()
+            self.show_events()
+            self.status.set(f"Track {index+1}, CH {channel}: {name} (Save As to save)")
+            picker.destroy()
+        items.bind("<Double-Button-1>", choose)
+        ttk.Button(picker, text="Insert selected instrument into MIDI",
+                   command=choose).pack(pady=8)
 
     def toggle_track_state(self, index, kind):
         if self.player.playing:
