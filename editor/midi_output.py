@@ -14,9 +14,10 @@ def available_outputs():
     except ImportError as exc:
         raise MidiError("MIDI output requires: pip install mido python-rtmidi") from exc
     try:
+        mido.set_backend("mido.backends.rtmidi")
         return mido.get_output_names()
     except Exception as exc:
-        raise MidiError(f"Cannot enumerate MIDI outputs: {exc}") from exc
+        raise MidiError(f"Cannot enumerate MIDI outputs (RtMidi): {exc}") from exc
 
 def timed_messages(song, include_sysex=False, enabled_tracks=None):
     """Yield (seconds, MIDI bytes), with tempo map taken from all tracks.
@@ -81,6 +82,7 @@ class MidiPlayer:
         port = None
         try:
             import mido
+            mido.set_backend("mido.backends.rtmidi")
             port = mido.open_output(port_name)
             if self.on_state:
                 self.on_state(True)
