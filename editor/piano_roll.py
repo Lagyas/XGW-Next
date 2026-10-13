@@ -518,8 +518,9 @@ class PianoRoll(tk.Toplevel):
         start, end, pitch, _, _, _, _ = self.notes[index]
         dx = self.canvas.canvasx(event.x) - old_x
         dy = self.canvas.canvasy(event.y) - old_y
-        tick = snapped_tick(max(0, round(start + dx * self.app.song.division / PIXELS_PER_BEAT)),
-                            self.app.song.division, self.snap_option.get())
+        tick = (start if abs(dx) < 2 else
+                snapped_tick(max(0, round(start + dx * self.app.song.division / PIXELS_PER_BEAT)),
+                             self.app.song.division, self.snap_option.get()))
         target_pitch = max(0, min(127, pitch - round(dy / NOTE_HEIGHT)))
         if resizing:
             tick = start
