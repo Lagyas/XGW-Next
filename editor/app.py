@@ -8,6 +8,7 @@ from piano_roll import PianoRoll
 from midi_output import MidiPlayer, available_outputs
 from xg_part_editor import XGPartEditor
 from drum_editor import DrumEditor
+from sequencer_view import SequencerView
 
 THEMES = {
     "Classic": ("#ece9d8", "#000000", "#ffffff"),
@@ -18,8 +19,8 @@ THEMES = {
 class App:
     def __init__(self, root):
         self.root = root
-        self.root.title("XGW Next 0.2 — MIDI Editor")
-        self.root.geometry("1050x650")
+        self.root.title("XGW Next 0.3 — Sequencer")
+        self.root.geometry("1250x760")
         self.song = None
         self.path = None
         self.history = []
@@ -61,8 +62,11 @@ class App:
         menu.add_cascade(label='Transport', menu=transport_menu)
         self.root.config(menu=menu)
 
+        self.sequencer = SequencerView(self.root, on_track=self.select_sequencer_track, on_open=self.open_sequencer_track)
+        self.sequencer.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
         outer = ttk.Panedwindow(self.root, orient=tk.HORIZONTAL)
-        outer.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+        outer.pack(fill=tk.BOTH, expand=False, padx=8, pady=8)
+        outer.configure(height=230)
         left = ttk.Frame(outer)
         right = ttk.Frame(outer)
         outer.add(left, weight=1)
@@ -74,7 +78,7 @@ class App:
         self.tracks.column("#0", width=170)
         self.tracks.column("events", width=65, anchor="e")
         self.tracks.pack(fill=tk.BOTH, expand=True)
-        self.tracks.bind("<<TreeviewSelect>>", lambda _: self.show_events())
+        self.tracks.bind("<<TreeviewSelect>>", lambda _: self.on_tree_track_select())
         ttk.Label(right, text="MIDI Events").pack(anchor="w")
         cols = ("tick", "channel", "type", "data")
         self.events = ttk.Treeview(right, columns=cols, show="headings", selectmode="browse")
@@ -85,6 +89,21 @@ class App:
         self.events.bind("<Double-1>", lambda _: self.edit_event())
         self.status = tk.StringVar(value="Open a MIDI file to begin.")
         ttk.Label(self.root, textvariable=self.status).pack(fill=tk.X, padx=8, pady=(0, 6))
+
+    def select_sequencer_track(self, index):
+        if self.song is not None and 0 <= index < len(self.song.tracks):
+            self.tracks.selection_set(str(index))
+            self.show_events()
+
+    def on_tree_track_select(self):
+        self.show_events()
+        index = self.selected_track()
+        if index is not None:
+            self.sequencer.select_track(index)
+
+    def open_sequencer_track(self, index):
+        self.select_sequencer_track(index)
+        self.open_piano_roll()
 
     def apply_theme(self):
         bg, fg, field = THEMES[self.theme.get()]
@@ -154,6 +173,7 @@ class App:
         self.status.set(f"{self.path.name} | Format {song.fmt} | {len(song.tracks)} tracks | division {song.division}")
 
     def refresh(self):
+        self.sequencer.set_song(self.song)
         self.tracks.delete(*self.tracks.get_children())
         self.events.delete(*self.events.get_children())
         if self.song:
@@ -168,6 +188,7 @@ class App:
         return int(selected[0]) if selected else None
 
     def show_events(self):
+        self.sequencer.draw()
         self.events.delete(*self.events.get_children())
         idx = self.selected_track()
         if idx is None or not self.song:
