@@ -71,3 +71,39 @@ def midi2_note_on(group, channel, note, velocity, attribute_type=0, attribute_da
     first = (0x4 << 28) | (group << 24) | (0x9 << 20) | (channel << 16) | (note << 8) | attribute_type
     second = (velocity << 16) | attribute_data
     return UmpPacket((first, second))
+
+def midi2_note_off(group, channel, note, velocity=0, attribute_type=0, attribute_data=0):
+    """Construct MIDI 2.0 Note Off (status 8), preserving 16-bit release velocity."""
+    packet = midi2_note_on(group, channel, note, max(1, velocity),
+                           attribute_type, attribute_data)
+    if type(velocity) is not int or not 0 <= velocity <= 65535:
+        raise MidiError("MIDI 2.0 release velocity out of range")
+    first = (packet.words[0] & ~(0xf << 20)) | (0x8 << 20)
+    return UmpPacket((first, (velocity << 16) | attribute_data))
+
+
+def midi2_control_change(group, channel, controller, value):
+    """Construct MIDI 2.0 Control Change with full unsigned 32-bit resolution."""
+    if any(type(v) is not int for v in (group, channel, controller, value)):
+        raise MidiError("MIDI 2.0 controller fields must be integers")
+    if not (0 <= group <= 15 and 0 <= channel <= 15 and
+            0 <= controller <= 127 and 0 <= value <= 0xffffffff):
+        raise MidiError("MIDI 2.0 controller field out of range")
+    first = (0x4 << 28) | (group << 24) | (0xb << 20) | (channel << 16) | (controller << 8)
+    return UmpPacket((first, value))
+
+
+def unpack_ump_stream(data):
+    """Decode consecutive UMP packets without discarding message boundaries."""
+    if len(data) % 4:
+        raise MidiError("Truncated UMP stream")
+    packets = []
+    pos = 0
+    while pos < len(data):
+        first = int.from_bytes(data[pos:pos + 4], "big")
+        size = UMP_WORD_COUNTS[(first >> 28) & 0xf] * 4
+        if pos + size > len(data):
+            raise MidiError("Truncated UMP packet")
+        packets.append(UmpPacket.from_bytes(data[pos:pos + size]))
+        pos += size
+    return packets
