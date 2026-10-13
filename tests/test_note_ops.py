@@ -4,7 +4,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "editor"))
 
 from midi import Event, Track, Song, MidiError
-from note_ops import paired_notes, insert_note, delete_note, move_note, quantize_notes
+from note_ops import paired_notes, insert_note, delete_note, move_note, quantize_notes, resize_note
 
 def song():
     return Song(0, 480, [Track([
@@ -33,6 +33,27 @@ class NoteOpsTests(unittest.TestCase):
         self.assertEqual(t.tracks[0].events[on_idx].data[0], 65)
         self.assertEqual(t.tracks[0].events[on_idx].tick, 240)
         self.assertEqual(t.tracks[0].events[off_idx].tick, 360)
+
+    def test_resize_note_roundtrip(self):
+        s = song()
+        self.assertEqual(resize_note(s, 0, 0, 1, 360), 360)
+        t = Song.from_bytes(s.to_bytes())
+        on, off = paired_notes(t.tracks[0])[0]
+        self.assertEqual(t.tracks[0].events[on].tick, 0)
+        self.assertEqual(t.tracks[0].events[off].tick, 360)
+        self.assertEqual(t.tracks[0].events[on].data[0], 60)
+
+    def test_resize_rejects_zero_length_without_mutation(self):
+        s = song()
+        with self.assertRaises(MidiError):
+            resize_note(s, 0, 0, 1, 0)
+        self.assertEqual(s.tracks[0].events[1].tick, 120)
+        self.assertFalse(s.dirty)
+
+    def test_resize_rejects_unpaired_indices(self):
+        s = song()
+        with self.assertRaises(MidiError):
+            resize_note(s, 0, 0, 2, 240)
 
     def test_delete_note(self):
         s = song()
