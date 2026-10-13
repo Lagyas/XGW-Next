@@ -20,13 +20,14 @@ def track_spans(song):
     return result
 
 class SequencerView(ttk.Frame):
-    def __init__(self, parent, on_track=None, on_open=None, on_toggle=None, on_instrument=None):
+    def __init__(self, parent, on_track=None, on_open=None, on_toggle=None, on_instrument=None, on_clip=None):
         super().__init__(parent)
         self.song = None
         self.on_track = on_track
         self.on_open = on_open
         self.on_toggle = on_toggle
         self.on_instrument = on_instrument
+        self.on_clip = on_clip
         self.muted = set()
         self.solo = set()
         self.selected_track = 0
@@ -80,6 +81,13 @@ class SequencerView(ttk.Frame):
             if 185 <= x < 215 and self.on_toggle:
                 self.on_toggle(row, "solo")
                 return
+            if x >= LEFT_WIDTH and self.on_clip and self.song is not None:
+                tick = int((x - LEFT_WIDTH) / BEAT_WIDTH * self.song.division)
+                for clip_index, (start, end) in enumerate(track_clips(self.song.tracks[row], self.song.division)):
+                    if start <= tick <= end:
+                        self.selected_track = row
+                        self.on_clip(row, clip_index)
+                        return
             self.selected_track = row
             self.draw()
             if self.on_track:
