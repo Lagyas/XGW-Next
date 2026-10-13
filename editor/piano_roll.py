@@ -402,7 +402,7 @@ class PianoRoll(tk.Toplevel):
         self.render()
 
     def drag_motion(self, event):
-        if self.drag_origin is None or self.app.song.division <= 0:
+        if self.drag_origin is None or self.app.song.division <= 0 or self.app.song.division & 0x8000:
             return
         index, old_x, old_y, resizing = self.drag_origin
         if index >= len(self.notes):
@@ -432,7 +432,7 @@ class PianoRoll(tk.Toplevel):
         index, old_x, old_y, resizing = self.drag_origin
         self.drag_origin = None
         self.canvas.delete("note-preview")
-        if index >= len(self.notes) or self.app.song.division & 0x8000:
+        if index >= len(self.notes) or self.app.song.division <= 0 or self.app.song.division & 0x8000:
             return
         start, end, pitch, _, _, on_idx, off_idx = self.notes[index]
         dx = self.canvas.canvasx(event.x) - old_x
