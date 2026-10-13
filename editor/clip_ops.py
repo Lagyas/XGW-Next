@@ -6,13 +6,17 @@ from midi import Event, MidiError
 from note_ops import paired_notes
 from arrangement import track_clips
 
-def edit_clip(song, track_index, clip_index, delta, duplicate=False):
+def edit_clip(song, track_index, clip_index, delta, duplicate=False, destination_track=None):
     if not isinstance(delta, int):
         raise MidiError("Tick offset must be an integer")
     if not 0 <= track_index < len(song.tracks):
         raise MidiError("Invalid track")
     if not 0 < song.division < 0x8000:
         raise MidiError("Only PPQN MIDI is supported")
+    if destination_track is None:
+        destination_track = track_index
+    if not 0 <= destination_track < len(song.tracks):
+        raise MidiError("Invalid destination track")
     track = song.tracks[track_index]
     clips = track_clips(track, song.division)
     if not 0 <= clip_index < len(clips):
@@ -29,12 +33,16 @@ def edit_clip(song, track_index, clip_index, delta, duplicate=False):
         raise MidiError("Cannot move notes before tick zero")
     if max(e.tick for e in selected) + delta > 0x0fffffff:
         raise MidiError("MIDI tick exceeds supported range")
-    if duplicate:
-        order = max((e.order for e in track.events), default=0) + 1
+    destination = song.tracks[destination_track]
+    if duplicate or destination_track != track_index:
+        order = max((e.order for e in destination.events), default=0) + 1
         for e in selected:
-            track.events.append(Event(e.tick + delta, e.status, bytes(e.data),
+            destination.events.append(Event(e.tick + delta, e.status, bytes(e.data),
                                       e.meta_type, order))
             order += 1
+        if not duplicate:
+            for e in selected:
+                track.events.remove(e)
     else:
         for e in selected:
             e.tick += delta
