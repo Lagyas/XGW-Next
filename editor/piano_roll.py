@@ -10,7 +10,7 @@ from midi import MidiError
 from note_ops import insert_note, delete_note, move_note, quantize_notes, quantize_selected_notes, resize_note, transform_notes, delete_notes
 from velocity_ops import set_note_velocities
 from meter_grid import grid_lines
-from snap_grid import SNAP_OPTIONS, snapped_tick
+from snap_grid import SNAP_OPTIONS, snapped_tick, snap_ticks
 
 NOTE_HEIGHT = 12
 PIXELS_PER_BEAT = 64
@@ -88,8 +88,10 @@ class PianoRoll(tk.Toplevel):
         toolbar.pack(fill="x", padx=8, pady=4)
         self.snap_option = tk.StringVar(value="1/16")
         ttk.Label(toolbar, text="Snap:").pack(side="left", padx=(0, 4))
-        ttk.Combobox(toolbar, textvariable=self.snap_option, values=SNAP_OPTIONS,
-                     state="readonly", width=7).pack(side="left", padx=(0, 12))
+        self.snap_box = ttk.Combobox(toolbar, textvariable=self.snap_option, values=SNAP_OPTIONS,
+                                      state="readonly", width=7)
+        self.snap_box.pack(side="left", padx=(0, 12))
+        self.snap_box.bind("<<ComboboxSelected>>", self.change_snap)
         ttk.Button(toolbar, text="Insert note", command=self.insert_note).pack(side="left")
         ttk.Button(toolbar, text="Delete selected", command=self.delete_selected).pack(side="left")
         ttk.Button(toolbar, text="Select all", command=self.select_all_notes).pack(side="left")
@@ -101,6 +103,14 @@ class PianoRoll(tk.Toplevel):
         self.context_menu = tk.Menu(self, tearoff=0)
         self.render()
         self.canvas.yview_moveto(0.32)
+
+    def change_snap(self, _event=None):
+        try:
+            snap_ticks(self.app.song.division, self.snap_option.get())
+        except MidiError as exc:
+            self.snap_option.set("Off")
+            self.info.set(f"Snap disabled: {exc}")
+        self.render()
 
     def horizontal_scroll(self, *args):
         self.canvas.xview(*args)
@@ -395,6 +405,14 @@ class PianoRoll(tk.Toplevel):
                                    fill="#b6c0d0")
         # Draw the meter grid across the entire scrollable width, even on empty tracks.
         end_tick = int((width - KEYBOARD_WIDTH) * division / PIXELS_PER_BEAT)
+        try:
+            snap_step = snap_ticks(division, self.snap_option.get())
+        except MidiError:
+            snap_step = None
+        if snap_step is not None and end_tick // snap_step <= 12000:
+            for tick in range(0, end_tick + 1, snap_step):
+                x = KEYBOARD_WIDTH + tick / division * PIXELS_PER_BEAT
+                canvas.create_line(x, TOP_MARGIN, x, height, fill="#edf0f5")
         for tick, is_bar, bar in grid_lines(song, end_tick):
             x = KEYBOARD_WIDTH + tick / division * PIXELS_PER_BEAT
             canvas.create_line(x, TOP_MARGIN, x, height,
