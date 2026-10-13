@@ -14,7 +14,6 @@ def available_outputs():
     except ImportError as exc:
         raise MidiError("MIDI output requires: pip install mido python-rtmidi") from exc
     try:
-        import mido.backends.rtmidi  # Make the dynamic backend visible to packagers.
         mido.set_backend("mido.backends.rtmidi")
         return mido.get_output_names()
     except Exception as exc:
@@ -83,7 +82,6 @@ class MidiPlayer:
         port = None
         try:
             import mido
-            import mido.backends.rtmidi
             mido.set_backend("mido.backends.rtmidi")
             port = mido.open_output(port_name)
             if self.on_state:
