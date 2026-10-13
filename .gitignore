@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# CMake and build output
+build/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+*.o
+*.obj
+*.exe
+*.app/
+*.dmg
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Do not commit Yamaha proprietary reference material or user songs
+XG4.ZIP
+SONGS.ZIP
+*.rar
+reference-material/
+private-fixtures/
