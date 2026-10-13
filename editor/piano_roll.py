@@ -67,6 +67,9 @@ class PianoRoll(tk.Toplevel):
         self.canvas.bind("<B1-Motion>", self.drag_motion)
         self.canvas.bind("<ButtonRelease-1>", self.end_drag)
         self.canvas.bind("<Double-Button-1>", self.edit_note)
+        self.canvas.bind("<ButtonPress-3>", self.begin_selection_box)
+        self.canvas.bind("<B3-Motion>", self.move_selection_box)
+        self.canvas.bind("<ButtonRelease-3>", self.finish_selection_box)
         self.bind("<Delete>", lambda event: self.delete_selected())
         self.bind("<Control-z>", self.undo_note_edit)
         self.bind("<Control-a>", self.select_all_notes)
@@ -79,8 +82,45 @@ class PianoRoll(tk.Toplevel):
         ttk.Button(toolbar, text="Duplicate +1 beat", command=self.duplicate_selected).pack(side="left")
         ttk.Button(toolbar, text="Quantize 1/16", command=self.quantize).pack(side="left")
         self.drag_origin = None
+        self.selection_origin = None
         self.render()
         self.canvas.yview_moveto(0.32)
+
+    def begin_selection_box(self, event):
+        self.selection_origin = (self.canvas.canvasx(event.x), self.canvas.canvasy(event.y))
+        self.canvas.delete("selection-box")
+
+    def move_selection_box(self, event):
+        if self.selection_origin is None:
+            return
+        x0, y0 = self.selection_origin
+        x1, y1 = self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
+        self.canvas.delete("selection-box")
+        self.canvas.create_rectangle(x0, y0, x1, y1, outline="#ea580c",
+                                     dash=(4, 3), tags="selection-box")
+
+    def finish_selection_box(self, event):
+        if self.selection_origin is None:
+            return
+        x0, y0 = self.selection_origin
+        x1, y1 = self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
+        self.selection_origin = None
+        self.canvas.delete("selection-box")
+        left, right = sorted((x0, x1))
+        top, bottom = sorted((y0, y1))
+        if not (event.state & 0x0001):
+            self.selected_pairs.clear()
+        division = self.app.song.division
+        if division <= 0 or division & 0x8000:
+            return
+        for start, end, pitch, channel, velocity, on_idx, off_idx in self.notes:
+            note_left = KEYBOARD_WIDTH + start / division * PIXELS_PER_BEAT
+            note_right = KEYBOARD_WIDTH + end / division * PIXELS_PER_BEAT
+            note_top = TOP_MARGIN + (127 - pitch) * NOTE_HEIGHT
+            if note_right >= left and note_left <= right and note_top <= bottom and note_top + NOTE_HEIGHT >= top:
+                self.selected_pairs.add((on_idx, off_idx))
+        self.render()
+        self.info.set(f"{len(self.selected_pairs)} notes selected.")
 
     def undo_note_edit(self, _event=None):
         if not self.app.history:
