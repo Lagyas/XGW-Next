@@ -1,0 +1,3 @@
+# Optional real MIDI output for the Python/Tkinter prototype
+mido>=1.3,<2
+python-rtmidi>=1.5,<2
