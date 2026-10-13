@@ -6,6 +6,7 @@ from pathlib import Path
 from midi import Song, MidiError
 from piano_roll import PianoRoll
 from midi_output import MidiPlayer, available_outputs
+from xg_part_editor import XGPartEditor
 
 THEMES = {
     "Classic": ("#ece9d8", "#000000", "#ffffff"),
@@ -43,6 +44,7 @@ class App:
         edit_menu.add_command(label="Undo", command=self.undo)
         view_menu = tk.Menu(menu, tearoff=0)
         view_menu.add_command(label="Piano Roll (selected track)...", command=self.open_piano_roll)
+        view_menu.add_command(label="Yamaha XG Part Editor...", command=self.open_xg_editor)
         menu.add_cascade(label="View", menu=view_menu)
         menu.add_cascade(label="Edit", menu=edit_menu)
         theme_menu = tk.Menu(menu, tearoff=0)
@@ -231,6 +233,9 @@ class App:
     def close_app(self):
         self.player.stop()
         self.root.destroy()
+
+    def open_xg_editor(self):
+        XGPartEditor(self)
 
     def open_piano_roll(self):
         track = self.selected_track()
