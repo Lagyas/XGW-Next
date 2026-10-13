@@ -2,7 +2,7 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 from midi import MidiError
-from note_ops import edit_note_event
+from note_ops import edit_note_event, delete_note_event
 
 class ListEditor(tk.Toplevel):
     def __init__(self, app, track_index):
@@ -125,20 +125,27 @@ class ListEditor(tk.Toplevel):
         index = self.selected_index()
         if index is None:
             return
+        if self.app.player.playing:
+            messagebox.showwarning("List Editor", "Stop playback before editing.", parent=self)
+            return
         track = self.app.song.tracks[self.track_index]
         event = track.events[index]
-        if event.status == 0xff and event.meta_type == 0x2f:
-            messagebox.showwarning("List Editor", "End-of-track event cannot be deleted.", parent=self)
+        is_note = 0x80 <= event.status <= 0x9f
+        if is_note and not messagebox.askyesno(
+                "Delete note", "Delete the complete note (Note On and Note Off)?",
+                parent=self):
             return
-        if event.status & 0xf0 in (0x80, 0x90) and event.status < 0xf0:
-            messagebox.showwarning("List Editor",
-                "Delete complete notes in Piano Roll to preserve note-on/note-off pairing.", parent=self)
-            return
-        self.app.snapshot()
-        del track.events[index]
-        self.app.song.dirty = True
-        self.refresh()
-        self.app.show_events()
+        try:
+            # Check validity before adding an undo snapshot.
+            from copy import deepcopy
+            probe = deepcopy(self.app.song)
+            delete_note_event(probe, self.track_index, index)
+            self.app.snapshot()
+            delete_note_event(self.app.song, self.track_index, index)
+            self.refresh()
+            self.app.show_events()
+        except MidiError as exc:
+            messagebox.showerror("List Editor", str(exc), parent=self)
 
     def undo(self):
         if not self.app.history:
