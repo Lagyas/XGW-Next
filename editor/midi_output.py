@@ -18,7 +18,7 @@ def available_outputs():
     except Exception as exc:
         raise MidiError(f"Cannot enumerate MIDI outputs: {exc}") from exc
 
-def timed_messages(song, include_sysex=False):
+def timed_messages(song, include_sysex=False, enabled_tracks=None):
     """Yield (seconds, MIDI bytes), with tempo map taken from all tracks.
 
     Supports PPQN SMF 0/1. Optionally emits complete F0 SysEx messages.\n    Incomplete or F7 continuation SysEx is skipped (not reconstructed).
@@ -29,7 +29,8 @@ def timed_messages(song, include_sysex=False):
     events = []
     for track_idx, track in enumerate(song.tracks):
         for ev in track.events:
-            events.append((ev.tick, track_idx, ev.order, ev))
+            if enabled_tracks is None or track_idx in enabled_tracks or (ev.status == 0xff and ev.meta_type == 0x51):
+                events.append((ev.tick, track_idx, ev.order, ev))
     events.sort(key=lambda row: row[:3])
     tempo = 500000
     last_tick = 0
@@ -62,13 +63,13 @@ class MidiPlayer:
     def playing(self):
         return self._thread is not None and self._thread.is_alive()
 
-    def play(self, song, port_name, include_sysex=False):
+    def play(self, song, port_name, include_sysex=False, enabled_tracks=None):
         if self.playing:
             raise MidiError("Playback is already active")
         if not port_name:
             raise MidiError("Choose a MIDI output")
         # Copy the event timeline before starting the worker thread.
-        timeline = list(timed_messages(song, include_sysex=include_sysex))
+        timeline = list(timed_messages(song, include_sysex=include_sysex, enabled_tracks=enabled_tracks))
         self._stop.clear()
         self._thread = threading.Thread(target=self._run, args=(timeline, port_name), daemon=True)
         self._thread.start()
