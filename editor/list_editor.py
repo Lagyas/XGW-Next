@@ -2,6 +2,7 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 from midi import MidiError
+from note_ops import edit_note_event
 
 class ListEditor(tk.Toplevel):
     def __init__(self, app, track_index):
@@ -99,8 +100,20 @@ class ListEditor(tk.Toplevel):
                 expected = 1 if event.status & 0xf0 in (0xc0, 0xd0) else 2
                 if len(raw) != expected or any(byte > 127 for byte in raw):
                     raise MidiError("Invalid MIDI data bytes")
-                self.app.snapshot()
-                self.app.song.set_event(self.track_index, index, tick=target_tick, data=raw)
+                is_note = 0x80 <= event.status <= 0x9f
+                if is_note:
+                    # Validate against a snapshot-free copy before recording undo.
+                    from copy import deepcopy
+                    probe = deepcopy(self.app.song)
+                    changed = edit_note_event(probe, self.track_index, index, target_tick, raw)
+                else:
+                    changed = target_tick != event.tick or raw != event.data
+                if changed:
+                    self.app.snapshot()
+                    if is_note:
+                        edit_note_event(self.app.song, self.track_index, index, target_tick, raw)
+                    else:
+                        self.app.song.set_event(self.track_index, index, tick=target_tick, data=raw)
                 self.refresh()
                 self.app.show_events()
                 dialog.destroy()
