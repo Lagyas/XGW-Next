@@ -4,6 +4,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
 from pathlib import Path
 from midi import Song, MidiError
+from piano_roll import PianoRoll
 
 THEMES = {
     "Classic": ("#ece9d8", "#000000", "#ffffff"),
@@ -35,6 +36,9 @@ class App:
         edit_menu.add_command(label="Edit selected event...", command=self.edit_event)
         edit_menu.add_command(label="Transpose selected track...", command=self.transpose)
         edit_menu.add_command(label="Undo", command=self.undo)
+        view_menu = tk.Menu(menu, tearoff=0)
+        view_menu.add_command(label="Piano Roll (selected track)...", command=self.open_piano_roll)
+        menu.add_cascade(label="View", menu=view_menu)
         menu.add_cascade(label="Edit", menu=edit_menu)
         theme_menu = tk.Menu(menu, tearoff=0)
         for name in THEMES:
@@ -168,6 +172,13 @@ class App:
             self.song = self.history.pop()
             self.refresh()
             self.status.set("Undo completed.")
+
+    def open_piano_roll(self):
+        track = self.selected_track()
+        if self.song is None or track is None:
+            messagebox.showinfo('Piano Roll', 'Open a MIDI file and select a track first.')
+            return
+        PianoRoll(self, track)
 
     def save_as(self):
         if not self.song:
