@@ -4,6 +4,22 @@ Cross-platform MIDI sequencer and Yamaha XG editor inspired by Yamaha XGworks V3
 
 > **Status:** Early development. Not a complete replacement for XGworks yet.
 
+## Download a desktop test build
+
+The [Build test applications](https://github.com/Lagyas/XGW-Next/actions/workflows/build-apps.yml)
+workflow packages the Python/Tkinter prototype for Windows and macOS.
+
+1. Open the workflow link while signed in to the private repository.
+2. Open the newest successful run (or choose **Run workflow**).
+3. Scroll to **Artifacts** and download **XGW-Next-Windows** or **XGW-Next-macOS**.
+4. Unzip the artifact. Windows: run `XGW-Next.exe`; macOS: launch `XGW-Next.app`.
+
+These are experimental, unsigned builds. Windows SmartScreen or macOS
+Gatekeeper may warn; only proceed if you trust the source. MIDI hardware
+playback and SysEx sending require a compatible connected MIDI interface.
+Build artifacts expire after 14 days. GitHub Actions must be enabled in
+the repository. An artifact appears only after the build succeeds.
+
 ## Goals
 
 - Windows and macOS support
