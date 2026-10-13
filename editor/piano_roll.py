@@ -383,7 +383,8 @@ class PianoRoll(tk.Toplevel):
                                    anchor="w", font=("Arial", 9))
                 canvas.create_line(0, y + NOTE_HEIGHT, width, y + NOTE_HEIGHT,
                                    fill="#b6c0d0")
-        end_tick = max_tick + division * 8
+        # Draw the meter grid across the entire scrollable width, even on empty tracks.
+        end_tick = int((width - KEYBOARD_WIDTH) * division / PIXELS_PER_BEAT)
         for tick, is_bar, bar in grid_lines(song, end_tick):
             x = KEYBOARD_WIDTH + tick / division * PIXELS_PER_BEAT
             canvas.create_line(x, TOP_MARGIN, x, height,
