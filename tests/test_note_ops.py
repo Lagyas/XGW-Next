@@ -4,7 +4,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "editor"))
 
 from midi import Event, Track, Song, MidiError
-from note_ops import paired_notes, insert_note, delete_note, move_note, quantize_notes, resize_note
+from note_ops import paired_notes, insert_note, delete_note, move_note, quantize_notes, resize_note, transform_notes, delete_notes
 
 def song():
     return Song(0, 480, [Track([
@@ -54,6 +54,31 @@ class NoteOpsTests(unittest.TestCase):
         s = song()
         with self.assertRaises(MidiError):
             resize_note(s, 0, 0, 2, 240)
+
+    def test_multi_note_move_and_copy(self):
+        s = song()
+        insert_note(s, 0, 480, 120, 64)
+        pairs = paired_notes(s.tracks[0])
+        self.assertEqual(transform_notes(s, 0, pairs, 240, 2), 2)
+        moved = paired_notes(s.tracks[0])
+        self.assertEqual(sorted(s.tracks[0].events[i].tick for i, _ in moved), [240, 720])
+        self.assertEqual(sorted(s.tracks[0].events[i].data[0] for i, _ in moved), [62, 66])
+        self.assertEqual(transform_notes(s, 0, moved, 240, 0, duplicate=True), 2)
+        self.assertEqual(len(paired_notes(Song.from_bytes(s.to_bytes()).tracks[0])), 4)
+
+    def test_multi_note_move_is_atomic_on_invalid_pitch(self):
+        s = song()
+        insert_note(s, 0, 480, 120, 127)
+        before = [(e.tick, e.data) for e in s.tracks[0].events]
+        with self.assertRaises(MidiError):
+            transform_notes(s, 0, paired_notes(s.tracks[0]), 0, 1)
+        self.assertEqual(before, [(e.tick, e.data) for e in s.tracks[0].events])
+
+    def test_multi_note_delete(self):
+        s = song()
+        insert_note(s, 0, 480, 120, 64)
+        self.assertEqual(delete_notes(s, 0, paired_notes(s.tracks[0])), 2)
+        self.assertEqual(len(paired_notes(s.tracks[0])), 0)
 
     def test_delete_note(self):
         s = song()
