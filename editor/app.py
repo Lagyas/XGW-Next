@@ -5,6 +5,7 @@ from tkinter import ttk, filedialog, messagebox, simpledialog
 from pathlib import Path
 from midi import Song, MidiError
 from piano_roll import PianoRoll
+from midi_output import MidiPlayer, available_outputs
 
 THEMES = {
     "Classic": ("#ece9d8", "#000000", "#ffffff"),
@@ -20,8 +21,11 @@ class App:
         self.song = None
         self.path = None
         self.history = []
+        self.player = MidiPlayer(on_state=self.playback_state, on_error=self.playback_error)
+        self.output_name = tk.StringVar(value='')
         self.theme = tk.StringVar(value="Classic")
         self.make_ui()
+        self.root.protocol("WM_DELETE_WINDOW", self.close_app)
         self.apply_theme()
 
     def make_ui(self):
@@ -30,7 +34,7 @@ class App:
         file_menu.add_command(label="Open MIDI...", command=self.open_file)
         file_menu.add_command(label="Save As...", command=self.save_as)
         file_menu.add_separator()
-        file_menu.add_command(label="Exit", command=self.root.destroy)
+        file_menu.add_command(label="Exit", command=self.close_app)
         menu.add_cascade(label="File", menu=file_menu)
         edit_menu = tk.Menu(menu, tearoff=0)
         edit_menu.add_command(label="Edit selected event...", command=self.edit_event)
@@ -44,6 +48,11 @@ class App:
         for name in THEMES:
             theme_menu.add_radiobutton(label=name, variable=self.theme, value=name, command=self.apply_theme)
         menu.add_cascade(label="Appearance", menu=theme_menu)
+        transport_menu = tk.Menu(menu, tearoff=0)
+        transport_menu.add_command(label='Choose MIDI output...', command=self.choose_output)
+        transport_menu.add_command(label='Play', command=self.play_midi)
+        transport_menu.add_command(label='Stop', command=self.stop_midi)
+        menu.add_cascade(label='Transport', menu=transport_menu)
         self.root.config(menu=menu)
 
         outer = ttk.Panedwindow(self.root, orient=tk.HORIZONTAL)
@@ -81,7 +90,51 @@ class App:
                         foreground="#151515" if self.theme.get() != "Modern Dark" else "#f0f0f0")
         style.configure("Treeview.Heading", background=bg, foreground=fg)
 
+    def playback_state(self, playing):
+        self.root.after(0, lambda: self.status.set(
+            'MIDI playback running...' if playing else 'MIDI playback stopped.'))
+
+    def playback_error(self, error):
+        self.root.after(0, lambda: messagebox.showerror('MIDI playback', error))
+
+    def choose_output(self):
+        try:
+            outputs = available_outputs()
+        except MidiError as exc:
+            messagebox.showerror('MIDI output', str(exc))
+            return
+        if not outputs:
+            messagebox.showinfo('MIDI output', 'No MIDI outputs detected.')
+            return
+        chooser = tk.Toplevel(self.root)
+        chooser.title('Select MIDI output')
+        chooser.geometry('460x240')
+        ttk.Label(chooser, text='Choose the connected MIDI interface / Yamaha module:').pack(pady=10)
+        selection = tk.StringVar(value=self.output_name.get() if self.output_name.get() in outputs else outputs[0])
+        combo = ttk.Combobox(chooser, values=outputs, textvariable=selection, state='readonly', width=48)
+        combo.pack(padx=10, pady=10)
+        def apply():
+            self.output_name.set(selection.get())
+            self.status.set('MIDI output: ' + selection.get())
+            chooser.destroy()
+        ttk.Button(chooser, text='Use this output', command=apply).pack(pady=10)
+
+    def play_midi(self):
+        if self.song is None:
+            messagebox.showinfo('MIDI playback', 'Open a MIDI file first.')
+            return
+        try:
+            self.player.play(self.song, self.output_name.get())
+        except MidiError as exc:
+            messagebox.showerror('MIDI playback', str(exc))
+
+    def stop_midi(self):
+        self.player.stop()
+
     def open_file(self):
+        if self.player.playing:
+            messagebox.showwarning('MIDI playback', 'Stop playback before opening another file.')
+            return
         path = filedialog.askopenfilename(filetypes=[("MIDI files", "*.mid *.midi"), ("All files", "*.*")])
         if not path:
             return
@@ -172,6 +225,10 @@ class App:
             self.song = self.history.pop()
             self.refresh()
             self.status.set("Undo completed.")
+
+    def close_app(self):
+        self.player.stop()
+        self.root.destroy()
 
     def open_piano_roll(self):
         track = self.selected_track()
