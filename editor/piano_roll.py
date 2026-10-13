@@ -7,7 +7,7 @@ from collections import defaultdict, deque
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 from midi import MidiError
-from note_ops import insert_note, delete_note, move_note, quantize_notes
+from note_ops import insert_note, delete_note, move_note, quantize_notes, resize_note
 
 NOTE_HEIGHT = 12
 PIXELS_PER_BEAT = 64
@@ -49,7 +49,7 @@ class PianoRoll(tk.Toplevel):
         self.geometry("1100x650")
         self.notes = []
         self.selected = None
-        self.info = tk.StringVar(value="Drag notes with the left mouse button; double-click for precise editing.")
+        self.info = tk.StringVar(value="Drag notes to move; drag right edge to resize; double-click to edit.")
         ttk.Label(self, textvariable=self.info).pack(fill="x", padx=8, pady=5)
         area = ttk.Frame(self)
         area.pack(fill="both", expand=True)
@@ -204,13 +204,16 @@ class PianoRoll(tk.Toplevel):
             self.drag_origin = None
             return
         self.selected = index
-        self.drag_origin = (index, self.canvas.canvasx(event.x), self.canvas.canvasy(event.y))
+        start, end, _, _, _, _, _ = self.notes[index]
+        end_x = KEYBOARD_WIDTH + end / self.app.song.division * PIXELS_PER_BEAT if self.app.song.division > 0 else 0
+        resizing = abs(self.canvas.canvasx(event.x) - end_x) <= 7
+        self.drag_origin = (index, self.canvas.canvasx(event.x), self.canvas.canvasy(event.y), resizing)
         self.render()
 
     def drag_motion(self, event):
         if self.drag_origin is None or self.app.song.division <= 0:
             return
-        index, old_x, old_y = self.drag_origin
+        index, old_x, old_y, resizing = self.drag_origin
         if index >= len(self.notes):
             return
         start, end, pitch, _, _, _, _ = self.notes[index]
@@ -218,8 +221,14 @@ class PianoRoll(tk.Toplevel):
         dy = self.canvas.canvasy(event.y) - old_y
         tick = max(0, round(start + dx * self.app.song.division / PIXELS_PER_BEAT))
         target_pitch = max(0, min(127, pitch - round(dy / NOTE_HEIGHT)))
+        if resizing:
+            tick = start
+            target_pitch = pitch
+            new_end = max(start + 1, round(end + dx * self.app.song.division / PIXELS_PER_BEAT))
+            x2 = KEYBOARD_WIDTH + new_end / self.app.song.division * PIXELS_PER_BEAT
+        else:
+            x2 = KEYBOARD_WIDTH + (tick + end - start) / self.app.song.division * PIXELS_PER_BEAT
         x1 = KEYBOARD_WIDTH + tick / self.app.song.division * PIXELS_PER_BEAT
-        x2 = x1 + max(3, (end - start) / self.app.song.division * PIXELS_PER_BEAT)
         y = TOP_MARGIN + (127 - target_pitch) * NOTE_HEIGHT
         self.canvas.delete("note-preview")
         self.canvas.create_rectangle(x1, y + 1, x2, y + NOTE_HEIGHT - 1,
@@ -239,15 +248,25 @@ class PianoRoll(tk.Toplevel):
         dy = self.canvas.canvasy(event.y) - old_y
         tick = max(0, round(start + dx * self.app.song.division / PIXELS_PER_BEAT))
         target_pitch = max(0, min(127, pitch - round(dy / NOTE_HEIGHT)))
-        if tick == start and target_pitch == pitch:
+        if resizing:
+            new_end = max(start + 1, round(end + dx * self.app.song.division / PIXELS_PER_BEAT))
+            if new_end == end:
+                return
+        elif tick == start and target_pitch == pitch:
             return
         try:
             self.app.snapshot()
-            move_note(self.app.song, self.track_index, on_idx, off_idx, tick, target_pitch)
+            if resizing:
+                resize_note(self.app.song, self.track_index, on_idx, off_idx, new_end)
+            else:
+                move_note(self.app.song, self.track_index, on_idx, off_idx, tick, target_pitch)
             self.selected = None
             self.render()
             self.app.show_events()
-            self.info.set(f"Moved note to {pitch_label(target_pitch)}, tick {tick}.")
+            if resizing:
+                self.info.set(f"Resized {pitch_label(pitch)} to {new_end - start} ticks.")
+            else:
+                self.info.set(f"Moved note to {pitch_label(target_pitch)}, tick {tick}.")
         except MidiError as exc:
             self.app.song = self.app.history.pop()
             messagebox.showerror("Move note", str(exc), parent=self)
