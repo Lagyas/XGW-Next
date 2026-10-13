@@ -96,6 +96,28 @@ def midi2_control_change(group, channel, controller, value):
     return UmpPacket((first, value))
 
 
+
+def midi2_pitch_bend(group, channel, value):
+    """MIDI 2.0 channel pitch bend: unsigned 32-bit, center 0x80000000."""
+    if any(type(v) is not int for v in (group, channel, value)):
+        raise MidiError("MIDI 2.0 pitch bend fields must be integers")
+    if not (0 <= group <= 15 and 0 <= channel <= 15 and
+            0 <= value <= 0xffffffff):
+        raise MidiError("MIDI 2.0 pitch bend field out of range")
+    first = (0x4 << 28) | (group << 24) | (0xe << 20) | (channel << 16)
+    return UmpPacket((first, value))
+
+
+def midi2_per_note_pitch_bend(group, channel, note, value):
+    """MIDI 2.0 per-note pitch bend (status 6), with 32-bit bend value."""
+    if any(type(v) is not int for v in (group, channel, note, value)):
+        raise MidiError("MIDI 2.0 per-note pitch bend fields must be integers")
+    if not (0 <= group <= 15 and 0 <= channel <= 15 and
+            0 <= note <= 127 and 0 <= value <= 0xffffffff):
+        raise MidiError("MIDI 2.0 per-note pitch bend field out of range")
+    first = (0x4 << 28) | (group << 24) | (0x6 << 20) | (channel << 16) | (note << 8)
+    return UmpPacket((first, value))
+
 def unpack_ump_stream(data):
     """Decode consecutive UMP packets without discarding message boundaries."""
     if len(data) % 4:
