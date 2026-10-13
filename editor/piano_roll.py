@@ -299,6 +299,10 @@ class PianoRoll(tk.Toplevel):
                                            initialvalue=max(1, end-start), minvalue=1, parent=self)
         if duration is None:
             return
+        new_velocity = simpledialog.askinteger("Velocity", "Note velocity (1–127):",
+                                               initialvalue=velocity, minvalue=1, maxvalue=127, parent=self)
+        if new_velocity is None:
+            return
         track = self.app.song.tracks[self.track_index]
         on = track.events[on_idx]
         off = track.events[off_idx]
@@ -308,7 +312,7 @@ class PianoRoll(tk.Toplevel):
                 raise MidiError("Note end tick is too large")
             self.app.snapshot()
             self.app.song.set_event(self.track_index, on_idx,
-                                    tick=new_start, data=bytes((new_pitch, on.data[1])))
+                                    tick=new_start, data=bytes((new_pitch, new_velocity)))
             self.app.song.set_event(self.track_index, off_idx,
                                     tick=new_start+duration, data=bytes((new_pitch, off.data[1])))
             self.app.show_events()
