@@ -12,6 +12,7 @@ pitches 35–81), with named rows and a horizontal beat grid.
 - Use **Insert hit...** to enter an exact start tick and drum note.
 - Use **Move selected...** to change position or pitch.
 - Use **Delete selected** to remove a note pair.
+- Use **Velocity...** to set the selected hit velocity (1–127).
 - Use **File → Save As** in the main editor to save changes.
 
 The implementation reuses the Piano Roll's note pairing and editing
