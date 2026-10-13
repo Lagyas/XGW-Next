@@ -31,7 +31,7 @@ jobs:
       - name: Test MIDI core
         run: python -m unittest discover -s tests -v
       - name: Package desktop app
-        run: python -m PyInstaller --noconfirm --clean --windowed --name XGW-Next --paths editor editor/app.py
+        run: python -m PyInstaller --noconfirm --clean --onefile --windowed --name XGW-Next --paths editor editor/app.py
       - name: Upload executable
         uses: actions/upload-artifact@v4
         with:
