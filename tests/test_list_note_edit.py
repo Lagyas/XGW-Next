@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "editor"))
 from midi import Event, Track, Song, MidiError
-from note_ops import edit_note_event
+from note_ops import edit_note_event, delete_note_event
 
 def example():
     return Song(0, 480, [Track([
@@ -45,6 +45,31 @@ class PairedNoteEditingTests(unittest.TestCase):
         song.dirty = False
         self.assertFalse(edit_note_event(song, 0, 0, 120, bytes((60, 100))))
         self.assertFalse(song.dirty)
+
+    def test_delete_note_on_removes_both_halves(self):
+        song = example()
+        self.assertEqual(delete_note_event(song, 0, 0), 2)
+        self.assertEqual(len(song.tracks[0].events), 1)
+        self.assertEqual(song.tracks[0].events[0].meta_type, 0x2f)
+
+    def test_delete_note_off_removes_both_halves(self):
+        song = example()
+        self.assertEqual(delete_note_event(song, 0, 1), 2)
+        self.assertEqual(len(song.tracks[0].events), 1)
+
+    def test_delete_end_of_track_rejected_atomically(self):
+        song = example()
+        before = list(song.tracks[0].events)
+        with self.assertRaises(MidiError):
+            delete_note_event(song, 0, 2)
+        self.assertEqual(song.tracks[0].events, before)
+
+    def test_delete_unpaired_note_rejected(self):
+        song = example()
+        song.tracks[0].events.pop(1)
+        with self.assertRaises(MidiError):
+            delete_note_event(song, 0, 0)
+        self.assertEqual(len(song.tracks[0].events), 2)
 
     def test_unpaired_note_rejected(self):
         song = example()
