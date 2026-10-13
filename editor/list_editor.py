@@ -3,6 +3,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from midi import MidiError
 from note_ops import edit_note_event, delete_note_event
+from event_fields import event_fields, encode_fields
 
 class ListEditor(tk.Toplevel):
     def __init__(self, app, track_index):
@@ -76,6 +77,9 @@ class ListEditor(tk.Toplevel):
         index = self.selected_index()
         if index is None:
             return
+        if self.app.player.playing:
+            messagebox.showwarning("List Editor", "Stop playback before editing.", parent=self)
+            return
         event = self.app.song.tracks[self.track_index].events[index]
         if event.status >= 0xf0:
             messagebox.showinfo("List Editor", "Editing raw SysEx and meta events is not supported yet.", parent=self)
@@ -85,16 +89,20 @@ class ListEditor(tk.Toplevel):
         dialog.transient(self)
         dialog.grab_set()
         tick = tk.StringVar(value=str(event.tick))
-        data = tk.StringVar(value=event.data.hex(" "))
-        for label, var in (("Absolute tick", tick), ("MIDI data bytes (hex)", data)):
+        fields = event_fields(event)
+        variables = [tk.StringVar(value=str(value)) for _, value, _, _ in fields]
+        rows = [("Absolute tick", tick)] + [
+            (f"{name} [{low}–{high}]", var)
+            for (name, _, low, high), var in zip(fields, variables)]
+        for label, var in rows:
             row = ttk.Frame(dialog)
             row.pack(fill="x", padx=14, pady=7)
-            ttk.Label(row, text=label, width=23).pack(side="left")
-            ttk.Entry(row, textvariable=var, width=30).pack(side="left")
+            ttk.Label(row, text=label, width=36).pack(side="left")
+            ttk.Entry(row, textvariable=var, width=20).pack(side="left")
         def save():
             try:
                 target_tick = int(tick.get())
-                raw = bytes.fromhex(data.get())
+                raw = encode_fields(event, [int(var.get()) for var in variables])
                 if not 0 <= target_tick <= 0x0fffffff:
                     raise MidiError("Tick must be within MIDI limits")
                 expected = 1 if event.status & 0xf0 in (0xc0, 0xd0) else 2
