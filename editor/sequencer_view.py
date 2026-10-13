@@ -47,7 +47,14 @@ class SequencerView(ttk.Frame):
         self.canvas.bind("<Double-Button-1>", self.double_click)
         self.canvas.bind("<B1-Motion>", self.drag_motion)
         self.canvas.bind("<ButtonRelease-1>", self.drag_release)
+        self.canvas.bind("<MouseWheel>", self.mouse_wheel)
         self.draw()
+
+    def mouse_wheel(self, event):
+        if event.state & 0x0001:
+            self.canvas.xview_scroll(-int(event.delta / 120), "units")
+        else:
+            self.canvas.yview_scroll(-int(event.delta / 120), "units")
 
     def set_mix(self, muted, solo):
         self.muted = set(muted)
@@ -109,7 +116,7 @@ class SequencerView(ttk.Frame):
         if clip >= len(clips):
             return
         start, end = clips[clip]
-        dx = event.x - sx
+        dx = self.canvas.canvasx(event.x) - self.canvas.canvasx(sx)
         target_row = self._row_at(event)
         if target_row is None:
             return
@@ -135,8 +142,8 @@ class SequencerView(ttk.Frame):
         target = self._row_at(event)
         if target is None:
             return
-        # Snap to the nearest quarter-note (beat).
-        beats = round((event.x - sx) / BEAT_WIDTH)
+        # Snap to the nearest quarter-note (beat), accounting for scrolling.
+        beats = round((self.canvas.canvasx(event.x) - self.canvas.canvasx(sx)) / BEAT_WIDTH)
         delta = beats * self.song.division
         if delta == 0 and target == row:
             return
