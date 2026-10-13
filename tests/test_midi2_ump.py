@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "editor"))
 from midi import MidiError
-from midi2_ump import UmpPacket, midi2_note_on, midi2_note_off, midi2_control_change, unpack_ump_stream
+from midi2_ump import UmpPacket, midi2_note_on, midi2_note_off, midi2_control_change, midi2_pitch_bend, midi2_per_note_pitch_bend, unpack_ump_stream
 
 class UmpTests(unittest.TestCase):
     def test_midi2_note_on_preserves_16bit_velocity(self):
@@ -51,6 +51,29 @@ class UmpTests(unittest.TestCase):
         self.assertEqual(unpack_ump_stream(data), [one, two, three])
         with self.assertRaises(MidiError):
             unpack_ump_stream(data[:-4])
+
+    def test_channel_pitch_bend_center_and_limits(self):
+        for value in (0, 0x80000000, 0xffffffff):
+            packet = midi2_pitch_bend(3, 4, value)
+            fields = packet.midi2_channel_voice()
+            self.assertEqual((fields["group"], fields["channel"], fields["status"]),
+                             (3, 4, 14))
+            self.assertEqual(fields["data32"], value)
+
+    def test_per_note_pitch_bend(self):
+        packet = midi2_per_note_pitch_bend(2, 1, 72, 0x90000000)
+        fields = packet.midi2_channel_voice()
+        self.assertEqual((fields["status"], fields["index"], fields["data32"]),
+                         (6, 72, 0x90000000))
+
+    def test_invalid_pitch_bend_fields(self):
+        for args in ((16, 0, 0), (0, 16, 0), (0, 0, -1),
+                     (0, 0, 0x100000000), (0, 0, 1.0)):
+            with self.assertRaises(MidiError):
+                midi2_pitch_bend(*args)
+        for args in ((0, 0, 128, 0), (0, 0, 60, -1), (0, 0, 60, True)):
+            with self.assertRaises(MidiError):
+                midi2_per_note_pitch_bend(*args)
 
     def test_invalid_note_fields(self):
         for args in ((0, 0, 60, 0), (16, 0, 60, 100), (0, 0, 128, 100)):
