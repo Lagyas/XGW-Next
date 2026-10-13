@@ -8,6 +8,7 @@ from piano_roll import PianoRoll
 from midi_output import MidiPlayer, available_outputs
 from xg_part_editor import XGPartEditor
 from drum_editor import DrumEditor
+from controller_editor import ControllerEditor
 from sequencer_view import SequencerView
 from track_voice import used_channels, channel_voice_at
 from xg_voices import voice_label, matching_voices
@@ -53,6 +54,7 @@ class App:
         view_menu = tk.Menu(menu, tearoff=0)
         view_menu.add_command(label="Piano Roll (selected track)...", command=self.open_piano_roll)
         view_menu.add_command(label="Drum Editor (selected track)...", command=self.open_drum_editor)
+        view_menu.add_command(label="MIDI Controller Editor (selected track)...", command=self.open_controller_editor)
         view_menu.add_command(label="Yamaha XG Part Editor...", command=self.open_xg_editor)
         menu.add_cascade(label="View", menu=view_menu)
         menu.add_cascade(label="Edit", menu=edit_menu)
@@ -429,6 +431,13 @@ class App:
     def close_app(self):
         self.player.stop()
         self.root.destroy()
+
+    def open_controller_editor(self):
+        track = self.selected_track()
+        if self.song is None or track is None:
+            messagebox.showinfo("Controller Editor", "Open a MIDI file and select a track first.")
+            return
+        ControllerEditor(self, track)
 
     def open_drum_editor(self):
         if self.song is None:
