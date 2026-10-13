@@ -4,6 +4,7 @@ from track_voice import used_channels, channel_voice_at
 from xg_voices import voice_label
 from tkinter import ttk
 from arrangement import track_clips
+from meter_grid import grid_lines
 
 ROW_HEIGHT = 42
 LEFT_WIDTH = 230
@@ -185,18 +186,21 @@ class SequencerView(ttk.Frame):
         c.configure(scrollregion=(0, 0, width, height))
         c.create_rectangle(0, 0, LEFT_WIDTH, HEADER_HEIGHT, fill="#e2e8f0", outline="#cbd5e1")
         c.create_text(12, 18, text="TRACK / MIDI PARTS", anchor="w", font=("Arial", 10, "bold"))
-        for beat in range(beats + 1):
-            x = LEFT_WIDTH + beat * BEAT_WIDTH
-            c.create_line(x, HEADER_HEIGHT, x, height,
-                          fill="#94a3b8" if beat % 4 == 0 else "#e2e8f0")
-            if beat % 4 == 0:
-                c.create_text(x + 3, 18, anchor="w", text=str(beat // 4 + 1))
+        marks = grid_lines(self.song, beats * division)
+        for tick, is_bar, bar in marks:
+            if is_bar:
+                x = LEFT_WIDTH + tick / division * BEAT_WIDTH
+                c.create_text(x + 3, 18, anchor="w", text=str(bar))
         for index, track in enumerate(self.song.tracks):
             y = HEADER_HEIGHT + index * ROW_HEIGHT
             active = index == self.selected_track
             c.create_rectangle(0, y, width, y + ROW_HEIGHT,
                                fill="#dbeafe" if active else ("#f8fafc" if index % 2 == 0 else "#ffffff"),
                                outline="#cbd5e1")
+            for tick, is_bar, _ in marks:
+                x = LEFT_WIDTH + tick / division * BEAT_WIDTH
+                c.create_line(x, y, x, y + ROW_HEIGHT,
+                              fill="#94a3b8" if is_bar else "#e2e8f0")
             c.create_text(10, y + 15, anchor="w", text=f"{index+1:02d}  {track.name()[:26]}")
             channels = sorted({(e.status & 15) + 1 for e in track.events if 0x80 <= e.status <= 0xef})
             if channels:
