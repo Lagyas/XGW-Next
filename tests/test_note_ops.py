@@ -74,6 +74,24 @@ class NoteOpsTests(unittest.TestCase):
             transform_notes(s, 0, paired_notes(s.tracks[0]), 0, 1)
         self.assertEqual(before, [(e.tick, e.data) for e in s.tracks[0].events])
 
+    def test_copy_drag_keeps_original_and_moves_duplicate_pitch(self):
+        s = song()
+        original = paired_notes(s.tracks[0])[0]
+        self.assertEqual(transform_notes(s, 0, [original], 240, 5, duplicate=True), 1)
+        pairs = paired_notes(s.tracks[0])
+        self.assertEqual(len(pairs), 2)
+        notes = sorted((s.tracks[0].events[on].tick, s.tracks[0].events[on].data[0])
+                       for on, _ in pairs)
+        self.assertEqual(notes, [(0, 60), (240, 65)])
+        self.assertEqual(len(paired_notes(Song.from_bytes(s.to_bytes()).tracks[0])), 2)
+
+    def test_copy_drag_invalid_pitch_does_not_append(self):
+        s = song()
+        before = len(s.tracks[0].events)
+        with self.assertRaises(MidiError):
+            transform_notes(s, 0, paired_notes(s.tracks[0]), 120, 100, duplicate=True)
+        self.assertEqual(len(s.tracks[0].events), before)
+
     def test_multi_note_delete(self):
         s = song()
         insert_note(s, 0, 480, 120, 64)
