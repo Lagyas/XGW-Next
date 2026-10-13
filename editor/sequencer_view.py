@@ -1,6 +1,7 @@
 """Arrangement overview for a MIDI song, grouped by track and time."""
 import tkinter as tk
 from tkinter import ttk
+from arrangement import track_clips
 
 ROW_HEIGHT = 42
 LEFT_WIDTH = 230
@@ -75,7 +76,7 @@ class SequencerView(ttk.Frame):
         if division <= 0 or division & 0x8000:
             c.create_text(28, 32, anchor="w", text="SMPTE timeline is not yet supported.")
             return
-        spans = track_spans(self.song)
+        spans = [track_clips(track, division) for track in self.song.tracks]
         max_tick = max((e.tick for t in self.song.tracks for e in t.events), default=division * 16)
         beats = max(32, int(max_tick / division) + 8)
         width = LEFT_WIDTH + beats * BEAT_WIDTH
@@ -100,11 +101,12 @@ class SequencerView(ttk.Frame):
             c.create_text(10, y + 31, anchor="w",
                           text="CH " + (", ".join(map(str, channels)) if channels else "—"),
                           fill="#475569", font=("Arial", 9))
-            span = spans[index]
-            if span is not None:
-                start, end = span
+            for start, end in spans[index]:
                 x1 = LEFT_WIDTH + start / division * BEAT_WIDTH
                 x2 = LEFT_WIDTH + max(end, start + division // 4) / division * BEAT_WIDTH
                 c.create_rectangle(x1, y + 8, max(x1 + 8, x2), y + ROW_HEIGHT - 8,
                                    fill="#3b82f6", outline="#1d4ed8")
+                c.create_text(x1 + 5, y + ROW_HEIGHT / 2, anchor="w",
+                              text=f"{max(1, (end-start)//division)} beats",
+                              fill="white", font=("Arial", 9))
         c.create_line(LEFT_WIDTH, 0, LEFT_WIDTH, height, fill="#64748b", width=2)
