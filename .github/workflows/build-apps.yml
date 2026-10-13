@@ -3,6 +3,9 @@ name: Build test applications
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
@@ -10,11 +13,9 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            artifact: XGW-Next-Windows
-            executable: dist/XGW-Next.exe
+            archive: XGW-Next-Windows.zip
           - os: macos-15
-            artifact: XGW-Next-macOS
-            executable: dist/XGW-Next.app
+            archive: XGW-Next-macOS.zip
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -27,10 +28,19 @@ jobs:
         run: python -m unittest discover -s tests -v
       - name: Package desktop app
         run: python -m PyInstaller --noconfirm --clean --onefile --windowed --name XGW-Next --paths editor editor/app.py
-      - name: Upload executable
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.executable }}
-          if-no-files-found: error
-          retention-days: 1
+      - name: Archive Windows executable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path dist/XGW-Next.exe -DestinationPath XGW-Next-Windows.zip
+      - name: Archive macOS app
+        if: runner.os == 'macOS'
+        run: ditto -c -k --sequesterRsrc --keepParent dist/XGW-Next.app XGW-Next-macOS.zip
+      - name: Publish downloadable build to GitHub Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: build-${{ github.run_id }}
+          ARCHIVE: ${{ matrix.archive }}
+        shell: bash
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "XGW Next test build ${{ github.run_id }}" --notes "Automated untested desktop build. Windows and macOS assets are uploaded independently." --prerelease --target "${{ github.sha }}"
+          gh release upload "$TAG" "$ARCHIVE" --clobber
