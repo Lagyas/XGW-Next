@@ -118,6 +118,46 @@ def delete_note(song, track_index, on_index, off_index):
     song.dirty = True
     return 2
 
+
+def edit_note_event(song, track_index, event_index, tick, data):
+    """Edit a note-on/off event while preserving the matched note pair.
+
+    Pitch changes update both halves. Moving either half changes that
+    endpoint only, and never permits the note-off to precede note-on.
+    """
+    if not 0 <= track_index < len(song.tracks):
+        raise MidiError("Invalid track")
+    track = song.tracks[track_index]
+    if not 0 <= event_index < len(track.events):
+        raise MidiError("Invalid event")
+    event = track.events[event_index]
+    if not 0x80 <= event.status <= 0x9f or len(event.data) != 2:
+        raise MidiError("Selected event is not a MIDI note")
+    if not 0 <= tick <= 0x0fffffff or len(data) != 2 or any(
+            type(byte) is not int or not 0 <= byte <= 127 for byte in data):
+        raise MidiError("Invalid note timing or data")
+    pair = next(((on_idx, off_idx) for on_idx, off_idx in paired_notes(track)
+                 if event_index in (on_idx, off_idx)), None)
+    if pair is None:
+        raise MidiError("Unpaired note cannot be edited safely")
+    on_idx, off_idx = pair
+    on, off = track.events[on_idx], track.events[off_idx]
+    is_on = event_index == on_idx
+    if is_on and data[1] == 0:
+        raise MidiError("Note-on velocity must be 1–127")
+    if (is_on and tick > off.tick) or (not is_on and tick < on.tick):
+        raise MidiError("Note-off must not precede note-on")
+    pitch = data[0]
+    if (event.tick, event.data, on.data[0], off.data[0]) == (
+            tick, bytes(data), pitch, pitch):
+        return False
+    event.tick = tick
+    event.data = bytes(data)
+    on.data = bytes((pitch, on.data[1]))
+    off.data = bytes((pitch, off.data[1]))
+    song.dirty = True
+    return True
+
 def move_note(song, track_index, on_index, off_index, tick, pitch):
     track = song.tracks[track_index]
     if (on_index, off_index) not in paired_notes(track):
