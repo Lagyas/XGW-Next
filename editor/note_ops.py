@@ -119,6 +119,30 @@ def delete_note(song, track_index, on_index, off_index):
     return 2
 
 
+def delete_note_event(song, track_index, event_index):
+    """Delete an event selected in List Editor, including both halves of a note."""
+    if not 0 <= track_index < len(song.tracks):
+        raise MidiError("Invalid track")
+    track = song.tracks[track_index]
+    if not 0 <= event_index < len(track.events):
+        raise MidiError("Invalid event")
+    event = track.events[event_index]
+    if event.status == 0xff and event.meta_type == 0x2f:
+        raise MidiError("End-of-track cannot be deleted")
+    if 0x80 <= event.status <= 0x9f:
+        pair = next((pair for pair in paired_notes(track) if event_index in pair), None)
+        if pair is None:
+            raise MidiError("Unpaired note cannot be deleted safely")
+        for index in sorted(pair, reverse=True):
+            del track.events[index]
+        removed = 2
+    else:
+        del track.events[event_index]
+        removed = 1
+    song.dirty = True
+    return removed
+
+
 def edit_note_event(song, track_index, event_index, tick, data):
     """Edit a note-on/off event while preserving the matched note pair.
 
