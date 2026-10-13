@@ -9,6 +9,7 @@ from midi import MidiError
 from piano_roll import extract_notes
 from note_ops import insert_note, delete_note, move_note
 from xg_drums import GM_DRUM_NOTES
+from note_ops import paired_notes
 
 ROW_H = 23
 BEAT_W = 80
@@ -34,6 +35,7 @@ class DrumEditor(tk.Toplevel):
         ttk.Button(bar, text="Insert hit...", command=self.insert_hit).pack(side="left", padx=5)
         ttk.Button(bar, text="Delete selected", command=self.delete_selected).pack(side="left", padx=5)
         ttk.Button(bar, text="Move selected...", command=self.move_selected).pack(side="left", padx=5)
+        ttk.Button(bar, text="Velocity...", command=self.edit_velocity).pack(side="left", padx=5)
         self.info = tk.StringVar(value="Click a drum hit to select; double-click empty grid to insert.")
         ttk.Label(self, textvariable=self.info).pack(fill="x", padx=8)
         area = ttk.Frame(self)
@@ -172,6 +174,27 @@ class DrumEditor(tk.Toplevel):
             self.app.song = self.app.history.pop()
             self.app.refresh()
             messagebox.showerror("Delete hit", str(exc), parent=self)
+
+    def edit_velocity(self):
+        if self.selected is None or self.selected >= len(self.notes):
+            return
+        _, _, _, _, current, on_idx, off_idx = self.notes[self.selected]
+        value = simpledialog.askinteger("Velocity", "Note velocity (1–127):",
+                                        initialvalue=current, minvalue=1, maxvalue=127, parent=self)
+        if value is None or value == current:
+            return
+        track = self.app.song.tracks[self.track_index]
+        if (on_idx, off_idx) not in paired_notes(track):
+            messagebox.showerror("Velocity", "Selected note pair is no longer valid.", parent=self)
+            return
+        self.app.snapshot()
+        on = track.events[on_idx]
+        on.data = bytes((on.data[0], value))
+        self.app.song.dirty = True
+        self.selected = None
+        self.render()
+        self.app.show_events()
+        self.info.set(f"Velocity updated to {value}; use Save As to save.")
 
     def move_selected(self):
         if self.selected is None or self.selected >= len(self.notes):
