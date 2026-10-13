@@ -9,6 +9,7 @@ from midi import MidiError
 from xg_parts import XGParts, PART_FIELDS
 from xg_voices import voice_label, matching_voices
 from voice_setup import insert_voice_setup
+from track_voice import channel_voice_at, used_channels
 
 LABELS = {
     "bank_msb": "Bank MSB", "bank_lsb": "Bank LSB",
@@ -46,6 +47,8 @@ class XGPartEditor(tk.Toplevel):
         for key in ("bank_msb", "bank_lsb", "program"):
             self.vars[key].trace_add("write", lambda *_: self.update_voice_label())
         self.update_voice_label()
+        ttk.Button(self, text="Read voice from selected MIDI track...",
+                   command=self.read_from_song).pack(pady=4)
         ttk.Button(self, text="Insert bank/program into selected MIDI track",
                    command=self.insert_into_song).pack(pady=4)
         ttk.Button(self, text="Send Part settings to MIDI output",
@@ -108,6 +111,38 @@ class XGPartEditor(tk.Toplevel):
         part = self.model.parts[index]
         for name in PART_FIELDS:
             self.vars[name].set(getattr(part, name))
+
+    def read_from_song(self):
+        if self.app.song is None or self.app.selected_track() is None:
+            messagebox.showinfo("Read voice", "Open a MIDI file and select a track first.", parent=self)
+            return
+        track = self.app.selected_track()
+        channels = used_channels(self.app.song, track)
+        if not channels:
+            messagebox.showinfo("Read voice", "No channel MIDI events in selected track.", parent=self)
+            return
+        channel = simpledialog.askinteger("MIDI channel",
+            "Read MIDI channel (available: " + ", ".join(map(str, channels)) + "):",
+            initialvalue=channels[0], minvalue=1, maxvalue=16, parent=self)
+        if channel is None:
+            return
+        if channel not in channels:
+            messagebox.showerror("Read voice", "Selected channel is not used in this track.", parent=self)
+            return
+        tick = simpledialog.askinteger("Position", "Read setup at tick:",
+                                      initialvalue=0, minvalue=0, parent=self)
+        if tick is None:
+            return
+        voice = channel_voice_at(self.app.song, track, channel, tick)
+        if not voice.has_program_change:
+            messagebox.showinfo("Read voice",
+                "No Program Change up to this tick; the track has no confirmed voice selection.",
+                parent=self)
+            return
+        for key, value in (("bank_msb", voice.msb), ("bank_lsb", voice.lsb),
+                           ("program", voice.program)):
+            self.vars[key].set(value)
+        self.update_voice_label()
 
     def insert_into_song(self):
         if self.app.song is None or self.app.selected_track() is None:
