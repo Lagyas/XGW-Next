@@ -87,6 +87,7 @@ class PianoRoll(tk.Toplevel):
             return
         self.app.undo()
         self.selected = None
+        self.selected_pairs.clear()
         self.render()
         self.info.set("Last MIDI edit undone.")
 
@@ -159,7 +160,7 @@ class PianoRoll(tk.Toplevel):
             x1 = KEYBOARD_WIDTH + start / division * PIXELS_PER_BEAT
             x2 = KEYBOARD_WIDTH + max(end, start + 1) / division * PIXELS_PER_BEAT
             y = TOP_MARGIN + (127 - pitch) * NOTE_HEIGHT
-            color = "#ea580c" if (on_index := self.notes[index][5], self.notes[index][6]) in self.selected_pairs else "#2563eb"
+            color = "#ea580c" if (self.notes[index][5], self.notes[index][6]) in self.selected_pairs else "#2563eb"
             canvas.create_rectangle(x1, y + 1, max(x1 + 3, x2), y + NOTE_HEIGHT - 1,
                                     fill=color, outline="#1e40af",
                                     tags=(f"note_{index}", "note"))
