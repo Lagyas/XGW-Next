@@ -101,3 +101,15 @@ def move_note(song, track_index, on_index, off_index, tick, pitch):
     on.data = bytes((pitch, on.data[1]))
     off.data = bytes((pitch, off.data[1]))
     song.dirty = True
+
+def resize_note(song, track_index, on_index, off_index, new_end_tick):
+    """Change note duration while preserving start, pitch, channel and velocity."""
+    track = song.tracks[track_index]
+    if (on_index, off_index) not in paired_notes(track):
+        raise MidiError("Selected events do not form a matched note")
+    on = track.events[on_index]
+    if not on.tick < new_end_tick <= 0x0fffffff:
+        raise MidiError("Note end must be after its start and within MIDI limits")
+    track.events[off_index].tick = new_end_tick
+    song.dirty = True
+    return new_end_tick - on.tick
