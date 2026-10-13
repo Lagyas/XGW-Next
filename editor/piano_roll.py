@@ -83,29 +83,90 @@ class PianoRoll(tk.Toplevel):
         ttk.Button(toolbar, text="Quantize 1/16", command=self.quantize).pack(side="left")
         self.drag_origin = None
         self.selection_origin = None
+        self.right_origin = None
+        self.context_menu = tk.Menu(self, tearoff=0)
         self.render()
         self.canvas.yview_moveto(0.32)
 
     def begin_selection_box(self, event):
-        self.selection_origin = (self.canvas.canvasx(event.x), self.canvas.canvasy(event.y))
-        self.canvas.delete("selection-box")
-
-    def move_selection_box(self, event):
-        if self.selection_origin is None:
-            return
-        x0, y0 = self.selection_origin
-        x1, y1 = self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
-        self.canvas.delete("selection-box")
-        self.canvas.create_rectangle(x0, y0, x1, y1, outline="#ea580c",
-                                     dash=(4, 3), tags="selection-box")
-
-    def finish_selection_box(self, event):
-        if self.selection_origin is None:
-            return
-        x0, y0 = self.selection_origin
-        x1, y1 = self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
+        """Right-click opens a menu; right-drag on empty space selects a region.
+        Ctrl+right-drag on notes copies and moves the notes in one gesture.
+        """
+        index = self.hit_note()
+        x, y = self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
+        self.right_origin = (index, x, y, event.x_root, event.y_root, bool(event.state & 0x0004))
         self.selection_origin = None
         self.canvas.delete("selection-box")
+        if index is not None:
+            pair = (self.notes[index][5], self.notes[index][6])
+            if pair not in self.selected_pairs:
+                self.selected_pairs = {pair}
+                self.render()
+
+    def move_selection_box(self, event):
+        if self.right_origin is None:
+            return
+        index, x0, y0, _, _, copying = self.right_origin
+        x1, y1 = self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
+        if abs(x1 - x0) + abs(y1 - y0) < 5:
+            return
+        if index is not None and copying:
+            self.preview_note_copy(x1 - x0, y1 - y0)
+        elif index is None:
+            self.selection_origin = (x0, y0)
+            self.canvas.delete("selection-box")
+            self.canvas.create_rectangle(x0, y0, x1, y1, outline="#ea580c",
+                                         dash=(4, 3), tags="selection-box")
+
+    def preview_note_copy(self, dx, dy):
+        self.canvas.delete("copy-preview")
+        division = self.app.song.division
+        if division <= 0 or division & 0x8000:
+            return
+        for start, end, pitch, _, _, on_idx, off_idx in self.notes:
+            if (on_idx, off_idx) not in self.selected_pairs:
+                continue
+            x1 = KEYBOARD_WIDTH + start / division * PIXELS_PER_BEAT + dx
+            x2 = KEYBOARD_WIDTH + end / division * PIXELS_PER_BEAT + dx
+            y = TOP_MARGIN + (127 - pitch) * NOTE_HEIGHT + dy
+            self.canvas.create_rectangle(x1, y + 1, max(x1 + 3, x2),
+                                         y + NOTE_HEIGHT - 1, outline="#16a34a",
+                                         width=2, dash=(3, 2), tags="copy-preview")
+
+    def finish_selection_box(self, event):
+        if self.right_origin is None:
+            return
+        index, x0, y0, root_x, root_y, copying = self.right_origin
+        self.right_origin = None
+        x1, y1 = self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
+        self.canvas.delete("selection-box")
+        self.canvas.delete("copy-preview")
+        dx, dy = x1 - x0, y1 - y0
+        if abs(dx) + abs(dy) < 5:
+            self.show_context_menu(event)
+            return
+        if index is not None and copying:
+            division = self.app.song.division
+            if division <= 0 or division & 0x8000:
+                return
+            pairs = self.selected_note_pairs()
+            delta_ticks = round(dx * division / PIXELS_PER_BEAT)
+            delta_pitch = -round(dy / NOTE_HEIGHT)
+            try:
+                self.app.snapshot()
+                transform_notes(self.app.song, self.track_index, pairs,
+                                delta_ticks=delta_ticks, delta_pitch=delta_pitch,
+                                duplicate=True)
+                self.selected_pairs.clear()
+                self.render()
+                self.app.show_events()
+                self.info.set(f"Copied and moved {len(pairs)} notes.")
+            except MidiError as exc:
+                self.app.song = self.app.history.pop()
+                messagebox.showerror("Copy notes", str(exc), parent=self)
+            return
+        if index is not None:
+            return
         left, right = sorted((x0, x1))
         top, bottom = sorted((y0, y1))
         if not (event.state & 0x0001):
@@ -113,7 +174,7 @@ class PianoRoll(tk.Toplevel):
         division = self.app.song.division
         if division <= 0 or division & 0x8000:
             return
-        for start, end, pitch, channel, velocity, on_idx, off_idx in self.notes:
+        for start, end, pitch, _, _, on_idx, off_idx in self.notes:
             note_left = KEYBOARD_WIDTH + start / division * PIXELS_PER_BEAT
             note_right = KEYBOARD_WIDTH + end / division * PIXELS_PER_BEAT
             note_top = TOP_MARGIN + (127 - pitch) * NOTE_HEIGHT
@@ -121,6 +182,38 @@ class PianoRoll(tk.Toplevel):
                 self.selected_pairs.add((on_idx, off_idx))
         self.render()
         self.info.set(f"{len(self.selected_pairs)} notes selected.")
+
+    def show_context_menu(self, event):
+        menu = self.context_menu
+        menu.delete(0, "end")
+        has_notes = bool(self.selected_pairs)
+        menu.add_command(label="Edit note...", command=self.edit_selected_note,
+                         state="normal" if len(self.selected_pairs) == 1 else "disabled")
+        menu.add_command(label="Duplicate +1 beat   Ctrl+D", command=self.duplicate_selected,
+                         state="normal" if has_notes else "disabled")
+        menu.add_command(label="Delete selected   Del", command=self.delete_selected,
+                         state="normal" if has_notes else "disabled")
+        menu.add_separator()
+        menu.add_command(label="Select all   Ctrl+A", command=self.select_all_notes)
+        menu.add_command(label="Insert note...", command=self.insert_note)
+        menu.add_command(label="Quantize 1/16", command=self.quantize)
+        menu.add_separator()
+        menu.add_command(label="Undo   Ctrl+Z", command=self.undo_note_edit,
+                         state="normal" if self.app.history else "disabled")
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def edit_selected_note(self):
+        if len(self.selected_pairs) != 1:
+            return
+        pair = next(iter(self.selected_pairs))
+        for index, note in enumerate(self.notes):
+            if (note[5], note[6]) == pair:
+                self.selected = index
+                self.edit_note(selected_index=index)
+                return
 
     def undo_note_edit(self, _event=None):
         if not self.app.history:
@@ -372,8 +465,8 @@ class PianoRoll(tk.Toplevel):
             self.app.song = self.app.history.pop()
             messagebox.showerror("Move note", str(exc), parent=self)
 
-    def edit_note(self, _event=None):
-        self.selected = self.hit_note()
+    def edit_note(self, _event=None, selected_index=None):
+        self.selected = self.hit_note() if selected_index is None else selected_index
         if self.selected is None:
             return
         start, end, pitch, channel, velocity, on_idx, off_idx = self.notes[self.selected]
