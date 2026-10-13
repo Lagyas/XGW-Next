@@ -49,7 +49,7 @@ class PianoRoll(tk.Toplevel):
         self.geometry("1100x650")
         self.notes = []
         self.selected = None
-        self.info = tk.StringVar(value="Click a note to select; double-click to edit pitch, start and duration.")
+        self.info = tk.StringVar(value="Drag notes with the left mouse button; double-click for precise editing.")
         ttk.Label(self, textvariable=self.info).pack(fill="x", padx=8, pady=5)
         area = ttk.Frame(self)
         area.pack(fill="both", expand=True)
@@ -62,15 +62,15 @@ class PianoRoll(tk.Toplevel):
         xscroll.grid(row=1, column=0, sticky="ew")
         area.columnconfigure(0, weight=1)
         area.rowconfigure(0, weight=1)
-        self.canvas.bind("<Button-1>", self.select_note)
+        self.canvas.bind("<ButtonPress-1>", self.begin_drag)
+        self.canvas.bind("<B1-Motion>", self.drag_motion)
+        self.canvas.bind("<ButtonRelease-1>", self.end_drag)
         self.canvas.bind("<Double-Button-1>", self.edit_note)
         toolbar = ttk.Frame(self)
         toolbar.pack(fill="x", padx=8, pady=4)
         ttk.Button(toolbar, text="Insert note", command=self.insert_note).pack(side="left")
         ttk.Button(toolbar, text="Delete selected", command=self.delete_selected).pack(side="left")
         ttk.Button(toolbar, text="Quantize 1/16", command=self.quantize).pack(side="left")
-        self.canvas.bind("<ButtonPress-3>", self.begin_drag)
-        self.canvas.bind("<ButtonRelease-3>", self.end_drag)
         self.drag_origin = None
         self.render()
         self.canvas.yview_moveto(0.32)
@@ -205,12 +205,33 @@ class PianoRoll(tk.Toplevel):
             return
         self.selected = index
         self.drag_origin = (index, self.canvas.canvasx(event.x), self.canvas.canvasy(event.y))
+        self.render()
+
+    def drag_motion(self, event):
+        if self.drag_origin is None or self.app.song.division <= 0:
+            return
+        index, old_x, old_y = self.drag_origin
+        if index >= len(self.notes):
+            return
+        start, end, pitch, _, _, _, _ = self.notes[index]
+        dx = self.canvas.canvasx(event.x) - old_x
+        dy = self.canvas.canvasy(event.y) - old_y
+        tick = max(0, round(start + dx * self.app.song.division / PIXELS_PER_BEAT))
+        target_pitch = max(0, min(127, pitch - round(dy / NOTE_HEIGHT)))
+        x1 = KEYBOARD_WIDTH + tick / self.app.song.division * PIXELS_PER_BEAT
+        x2 = x1 + max(3, (end - start) / self.app.song.division * PIXELS_PER_BEAT)
+        y = TOP_MARGIN + (127 - target_pitch) * NOTE_HEIGHT
+        self.canvas.delete("note-preview")
+        self.canvas.create_rectangle(x1, y + 1, x2, y + NOTE_HEIGHT - 1,
+                                     outline="#ea580c", width=2, dash=(3, 2),
+                                     tags="note-preview")
 
     def end_drag(self, event):
         if self.drag_origin is None:
             return
         index, old_x, old_y = self.drag_origin
         self.drag_origin = None
+        self.canvas.delete("note-preview")
         if index >= len(self.notes) or self.app.song.division & 0x8000:
             return
         start, end, pitch, _, _, on_idx, off_idx = self.notes[index]
@@ -218,6 +239,8 @@ class PianoRoll(tk.Toplevel):
         dy = self.canvas.canvasy(event.y) - old_y
         tick = max(0, round(start + dx * self.app.song.division / PIXELS_PER_BEAT))
         target_pitch = max(0, min(127, pitch - round(dy / NOTE_HEIGHT)))
+        if tick == start and target_pitch == pitch:
+            return
         try:
             self.app.snapshot()
             move_note(self.app.song, self.track_index, on_idx, off_idx, tick, target_pitch)
