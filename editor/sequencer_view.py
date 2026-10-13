@@ -1,0 +1,110 @@
+"""Arrangement overview for a MIDI song, grouped by track and time."""
+import tkinter as tk
+from tkinter import ttk
+
+ROW_HEIGHT = 42
+LEFT_WIDTH = 230
+BEAT_WIDTH = 28
+HEADER_HEIGHT = 38
+
+def track_spans(song):
+    """Return one note span per track, preserving empty tracks."""
+    result = []
+    for track in song.tracks:
+        note_ticks = [e.tick for e in track.events
+                      if 0x80 <= e.status <= 0x9f and len(e.data) == 2]
+        result.append((min(note_ticks), max(note_ticks)) if note_ticks else None)
+    return result
+
+class SequencerView(ttk.Frame):
+    def __init__(self, parent, on_track=None, on_open=None):
+        super().__init__(parent)
+        self.song = None
+        self.on_track = on_track
+        self.on_open = on_open
+        self.selected_track = 0
+        self.canvas = tk.Canvas(self, background="#f9fafb", highlightthickness=0)
+        xs = ttk.Scrollbar(self, orient="horizontal", command=self.canvas.xview)
+        ys = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+        self.canvas.configure(xscrollcommand=xs.set, yscrollcommand=ys.set)
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+        xs.grid(row=1, column=0, sticky="ew")
+        ys.grid(row=0, column=1, sticky="ns")
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+        self.canvas.bind("<Button-1>", self.click)
+        self.canvas.bind("<Double-Button-1>", self.double_click)
+        self.draw()
+
+    def set_song(self, song):
+        self.song = song
+        self.selected_track = 0
+        self.draw()
+
+    def select_track(self, index):
+        self.selected_track = index
+        self.draw()
+
+    def _row_at(self, event):
+        y = self.canvas.canvasy(event.y)
+        row = int((y - HEADER_HEIGHT) // ROW_HEIGHT)
+        if self.song is None or not 0 <= row < len(self.song.tracks):
+            return None
+        return row
+
+    def click(self, event):
+        row = self._row_at(event)
+        if row is not None:
+            self.selected_track = row
+            self.draw()
+            if self.on_track:
+                self.on_track(row)
+
+    def double_click(self, event):
+        row = self._row_at(event)
+        if row is not None and self.on_open:
+            self.on_open(row)
+
+    def draw(self):
+        c = self.canvas
+        c.delete("all")
+        if self.song is None:
+            c.create_text(28, 32, anchor="w", text="Open a MIDI file to view the sequencer.")
+            return
+        division = self.song.division
+        if division <= 0 or division & 0x8000:
+            c.create_text(28, 32, anchor="w", text="SMPTE timeline is not yet supported.")
+            return
+        spans = track_spans(self.song)
+        max_tick = max((e.tick for t in self.song.tracks for e in t.events), default=division * 16)
+        beats = max(32, int(max_tick / division) + 8)
+        width = LEFT_WIDTH + beats * BEAT_WIDTH
+        height = HEADER_HEIGHT + max(10, len(self.song.tracks)) * ROW_HEIGHT
+        c.configure(scrollregion=(0, 0, width, height))
+        c.create_rectangle(0, 0, LEFT_WIDTH, HEADER_HEIGHT, fill="#e2e8f0", outline="#cbd5e1")
+        c.create_text(12, 18, text="TRACK / MIDI PARTS", anchor="w", font=("Arial", 10, "bold"))
+        for beat in range(beats + 1):
+            x = LEFT_WIDTH + beat * BEAT_WIDTH
+            c.create_line(x, HEADER_HEIGHT, x, height,
+                          fill="#94a3b8" if beat % 4 == 0 else "#e2e8f0")
+            if beat % 4 == 0:
+                c.create_text(x + 3, 18, anchor="w", text=str(beat // 4 + 1))
+        for index, track in enumerate(self.song.tracks):
+            y = HEADER_HEIGHT + index * ROW_HEIGHT
+            active = index == self.selected_track
+            c.create_rectangle(0, y, width, y + ROW_HEIGHT,
+                               fill="#dbeafe" if active else ("#f8fafc" if index % 2 == 0 else "#ffffff"),
+                               outline="#cbd5e1")
+            c.create_text(10, y + 15, anchor="w", text=f"{index+1:02d}  {track.name()[:26]}")
+            channels = sorted({(e.status & 15) + 1 for e in track.events if 0x80 <= e.status <= 0xef})
+            c.create_text(10, y + 31, anchor="w",
+                          text="CH " + (", ".join(map(str, channels)) if channels else "—"),
+                          fill="#475569", font=("Arial", 9))
+            span = spans[index]
+            if span is not None:
+                start, end = span
+                x1 = LEFT_WIDTH + start / division * BEAT_WIDTH
+                x2 = LEFT_WIDTH + max(end, start + division // 4) / division * BEAT_WIDTH
+                c.create_rectangle(x1, y + 8, max(x1 + 8, x2), y + ROW_HEIGHT - 8,
+                                   fill="#3b82f6", outline="#1d4ed8")
+        c.create_line(LEFT_WIDTH, 0, LEFT_WIDTH, height, fill="#64748b", width=2)
