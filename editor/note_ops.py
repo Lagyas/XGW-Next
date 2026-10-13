@@ -113,3 +113,49 @@ def resize_note(song, track_index, on_index, off_index, new_end_tick):
     track.events[off_index].tick = new_end_tick
     song.dirty = True
     return new_end_tick - on.tick
+
+def transform_notes(song, track_index, pairs, delta_ticks=0, delta_pitch=0, duplicate=False):
+    """Atomically move or duplicate a selection of matched note pairs."""
+    track = song.tracks[track_index]
+    valid = set(paired_notes(track))
+    chosen = list(dict.fromkeys(tuple(pair) for pair in pairs))
+    if not chosen or any(pair not in valid for pair in chosen):
+        raise MidiError("Invalid note selection")
+    updates = []
+    for on_idx, off_idx in chosen:
+        on, off = track.events[on_idx], track.events[off_idx]
+        pitch = on.data[0] + delta_pitch
+        start, end = on.tick + delta_ticks, off.tick + delta_ticks
+        if not 0 <= pitch <= 127 or not 0 <= start <= end <= 0x0fffffff:
+            raise MidiError("Note movement exceeds MIDI pitch or time range")
+        updates.append((on, off, start, end, pitch))
+    if not duplicate and delta_ticks == 0 and delta_pitch == 0:
+        return 0
+    if duplicate:
+        order = max((e.order for e in track.events), default=-1) + 1
+        for on, off, start, end, pitch in updates:
+            track.events.append(Event(start, on.status, bytes((pitch, on.data[1])),
+                                      on.meta_type, order))
+            track.events.append(Event(end, off.status, bytes((pitch, off.data[1])),
+                                      off.meta_type, order + 1))
+            order += 2
+    else:
+        for on, off, start, end, pitch in updates:
+            on.tick, off.tick = start, end
+            on.data = bytes((pitch, on.data[1]))
+            off.data = bytes((pitch, off.data[1]))
+    song.dirty = True
+    return len(updates)
+
+def delete_notes(song, track_index, pairs):
+    """Delete a validated group of notes as one edit."""
+    track = song.tracks[track_index]
+    valid = set(paired_notes(track))
+    chosen = list(dict.fromkeys(tuple(pair) for pair in pairs))
+    if not chosen or any(pair not in valid for pair in chosen):
+        raise MidiError("Invalid note selection")
+    indices = sorted({i for pair in chosen for i in pair}, reverse=True)
+    for index in indices:
+        del track.events[index]
+    song.dirty = True
+    return len(chosen)
