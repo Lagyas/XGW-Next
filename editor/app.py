@@ -9,6 +9,7 @@ from midi_output import MidiPlayer, available_outputs
 from xg_part_editor import XGPartEditor
 from drum_editor import DrumEditor
 from controller_editor import ControllerEditor
+from list_editor import ListEditor
 from sequencer_view import SequencerView
 from track_voice import used_channels, channel_voice_at
 from xg_voices import voice_label, matching_voices
@@ -35,6 +36,7 @@ class App:
         self.output_name = tk.StringVar(value='')
         self.send_sysex = tk.BooleanVar(value=False)
         self.theme = tk.StringVar(value="Classic")
+        self.track_double_click_editor = tk.StringVar(value="Piano Roll")
         self.make_ui()
         self.root.protocol("WM_DELETE_WINDOW", self.close_app)
         self.apply_theme()
@@ -53,6 +55,12 @@ class App:
         edit_menu.add_command(label="Undo", command=self.undo)
         view_menu = tk.Menu(menu, tearoff=0)
         view_menu.add_command(label="Piano Roll (selected track)...", command=self.open_piano_roll)
+        view_menu.add_command(label="List Editor (selected track)...", command=self.open_list_editor)
+        double_click_menu = tk.Menu(view_menu, tearoff=0)
+        for editor_name in ("Piano Roll", "List Editor", "Drum Editor"):
+            double_click_menu.add_radiobutton(label=editor_name, variable=self.track_double_click_editor,
+                                              value=editor_name)
+        view_menu.add_cascade(label="Track double-click opens", menu=double_click_menu)
         view_menu.add_command(label="Drum Editor (selected track)...", command=self.open_drum_editor)
         view_menu.add_command(label="MIDI Controller Editor (selected track)...", command=self.open_controller_editor)
         view_menu.add_command(label="Yamaha XG Part Editor...", command=self.open_xg_editor)
@@ -254,7 +262,13 @@ class App:
 
     def open_sequencer_track(self, index):
         self.select_sequencer_track(index)
-        self.open_piano_roll()
+        editor = self.track_double_click_editor.get()
+        if editor == "List Editor":
+            self.open_list_editor()
+        elif editor == "Drum Editor":
+            self.open_drum_editor()
+        else:
+            self.open_piano_roll()
 
     def apply_theme(self):
         bg, fg, field = THEMES[self.theme.get()]
@@ -451,6 +465,13 @@ class App:
 
     def open_xg_editor(self):
         XGPartEditor(self)
+
+    def open_list_editor(self):
+        track = self.selected_track()
+        if self.song is None or track is None:
+            messagebox.showinfo("List Editor", "Open a MIDI file and select a track first.")
+            return
+        ListEditor(self, track)
 
     def open_piano_roll(self):
         track = self.selected_track()
