@@ -7,6 +7,7 @@ from collections import defaultdict, deque
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 from midi import MidiError
+from note_ops import insert_note, delete_note, move_note, quantize_notes
 
 NOTE_HEIGHT = 12
 PIXELS_PER_BEAT = 64
@@ -63,6 +64,14 @@ class PianoRoll(tk.Toplevel):
         area.rowconfigure(0, weight=1)
         self.canvas.bind("<Button-1>", self.select_note)
         self.canvas.bind("<Double-Button-1>", self.edit_note)
+        toolbar = ttk.Frame(self)
+        toolbar.pack(fill="x", padx=8, pady=4)
+        ttk.Button(toolbar, text="Insert note", command=self.insert_note).pack(side="left")
+        ttk.Button(toolbar, text="Delete selected", command=self.delete_selected).pack(side="left")
+        ttk.Button(toolbar, text="Quantize 1/16", command=self.quantize).pack(side="left")
+        self.canvas.bind("<ButtonPress-3>", self.begin_drag)
+        self.canvas.bind("<ButtonRelease-3>", self.end_drag)
+        self.drag_origin = None
         self.render()
         self.canvas.yview_moveto(0.32)
 
@@ -131,6 +140,94 @@ class PianoRoll(tk.Toplevel):
             self.info.set(f"{pitch_label(pitch)} | channel {channel} | start {start} | "
                           f"duration {end-start} ticks | velocity {velocity}")
         self.render()
+
+    def insert_note(self):
+        if self.app.song.division & 0x8000:
+            messagebox.showerror("Insert note", "SMPTE division is not supported.", parent=self)
+            return
+        tick = simpledialog.askinteger("Insert note", "Start tick:", initialvalue=0, minvalue=0, parent=self)
+        if tick is None:
+            return
+        duration = simpledialog.askinteger("Insert note", "Duration (ticks):",
+                                           initialvalue=self.app.song.division, minvalue=1, parent=self)
+        if duration is None:
+            return
+        pitch = simpledialog.askinteger("Insert note", "MIDI pitch (0–127):",
+                                        initialvalue=60, minvalue=0, maxvalue=127, parent=self)
+        if pitch is None:
+            return
+        channel = simpledialog.askinteger("Insert note", "Channel (1–16):",
+                                          initialvalue=1, minvalue=1, maxvalue=16, parent=self)
+        if channel is None:
+            return
+        try:
+            self.app.snapshot()
+            insert_note(self.app.song, self.track_index, tick, duration, pitch, channel=channel)
+            self.selected = None
+            self.render()
+            self.app.show_events()
+        except MidiError as exc:
+            self.app.song = self.app.history.pop()
+            messagebox.showerror("Insert note", str(exc), parent=self)
+
+    def delete_selected(self):
+        if self.selected is None or self.selected >= len(self.notes):
+            return
+        _, _, _, _, _, on_idx, off_idx = self.notes[self.selected]
+        try:
+            self.app.snapshot()
+            delete_note(self.app.song, self.track_index, on_idx, off_idx)
+            self.selected = None
+            self.render()
+            self.app.show_events()
+        except MidiError as exc:
+            self.app.song = self.app.history.pop()
+            messagebox.showerror("Delete note", str(exc), parent=self)
+
+    def quantize(self):
+        try:
+            self.app.snapshot()
+            count = quantize_notes(self.app.song, self.track_index, 16)
+            if count == 0:
+                self.app.history.pop()
+            self.selected = None
+            self.render()
+            self.app.show_events()
+            self.info.set(f"Quantized {count} notes to 1/16.")
+        except MidiError as exc:
+            self.app.song = self.app.history.pop()
+            messagebox.showerror("Quantize", str(exc), parent=self)
+
+    def begin_drag(self, event):
+        index = self.hit_note()
+        if index is None:
+            self.drag_origin = None
+            return
+        self.selected = index
+        self.drag_origin = (index, self.canvas.canvasx(event.x), self.canvas.canvasy(event.y))
+
+    def end_drag(self, event):
+        if self.drag_origin is None:
+            return
+        index, old_x, old_y = self.drag_origin
+        self.drag_origin = None
+        if index >= len(self.notes) or self.app.song.division & 0x8000:
+            return
+        start, end, pitch, _, _, on_idx, off_idx = self.notes[index]
+        dx = self.canvas.canvasx(event.x) - old_x
+        dy = self.canvas.canvasy(event.y) - old_y
+        tick = max(0, round(start + dx * self.app.song.division / PIXELS_PER_BEAT))
+        target_pitch = max(0, min(127, pitch - round(dy / NOTE_HEIGHT)))
+        try:
+            self.app.snapshot()
+            move_note(self.app.song, self.track_index, on_idx, off_idx, tick, target_pitch)
+            self.selected = None
+            self.render()
+            self.app.show_events()
+            self.info.set(f"Moved note to {pitch_label(target_pitch)}, tick {tick}.")
+        except MidiError as exc:
+            self.app.song = self.app.history.pop()
+            messagebox.showerror("Move note", str(exc), parent=self)
 
     def edit_note(self, _event=None):
         self.selected = self.hit_note()
