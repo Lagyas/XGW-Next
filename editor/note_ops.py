@@ -60,6 +60,37 @@ def quantize_notes(song, track_index, denominator=16, strength=100):
         song.dirty = True
     return sum(bool(delta) for _, _, delta in changes)
 
+
+def quantize_selected_notes(song, track_index, pairs, denominator=16, strength=100):
+    """Quantize only selected matched notes; preserve each duration."""
+    division = _division(song)
+    if not 0 <= track_index < len(song.tracks):
+        raise MidiError("Invalid track")
+    if denominator not in (4, 8, 16, 32, 64) or not 0 <= strength <= 100:
+        raise MidiError("Invalid quantize settings")
+    grid = division * 4 // denominator
+    if grid < 1:
+        raise MidiError("Grid finer than MIDI tick resolution")
+    track = song.tracks[track_index]
+    valid = set(paired_notes(track))
+    chosen = list(dict.fromkeys(tuple(pair) for pair in pairs))
+    if not chosen or any(pair not in valid for pair in chosen):
+        raise MidiError("Invalid note selection")
+    changes = []
+    for on_idx, off_idx in chosen:
+        on, off = track.events[on_idx], track.events[off_idx]
+        delta = round((quantize_tick(on.tick, grid) - on.tick) * strength / 100)
+        if on.tick + delta < 0 or off.tick + delta > 0x0fffffff:
+            raise MidiError("Quantized note is outside MIDI tick limits")
+        changes.append((on, off, delta))
+    for on, off, delta in changes:
+        on.tick += delta
+        off.tick += delta
+    count = sum(bool(delta) for _, _, delta in changes)
+    if count:
+        song.dirty = True
+    return count
+
 def insert_note(song, track_index, tick, duration, pitch, velocity=100, channel=1):
     if not 0 <= tick or duration <= 0 or tick + duration > 0x0fffffff:
         raise MidiError("Invalid note timing")
