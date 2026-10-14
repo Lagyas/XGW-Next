@@ -1,20 +1,34 @@
 @echo off
-setlocal
+setlocal EnableExtensions
 cd /d "%~dp0"
-rem Make editor modules available to unittest and application imports.
-set "PYTHONPATH=%~dp0editor"
+if errorlevel 1 exit /b 1
+set "PYTHONPATH=%CD%\editor"
+where py >nul 2>nul
+if errorlevel 1 (
+  echo ERROR: Python launcher 'py' not found. Install Python 3.12.
+  exit /b 1
+)
 py -3.12 -m venv .venv
 if errorlevel 1 exit /b 1
-call .venv\Scripts\activate.bat
-python -m pip install --upgrade pip pyinstaller "mido>=1.3,<2" "python-rtmidi>=1.5,<2"
+call ".venv\Scripts\activate.bat"
 if errorlevel 1 exit /b 1
-python -m unittest discover -s tests -v
+python -m pip install --upgrade pip pyinstaller "mido>=1.3,<2" "python-rtmidi>=1.5,<2" "pytest>=8,<10"
 if errorlevel 1 exit /b 1
-python -m PyInstaller --noconfirm --clean --onefile --windowed --name XGW-Next --paths editor --collect-submodules mido.backends --hidden-import mido.backends.rtmidi --collect-submodules rtmidi editor/app.py
+python -m pytest tests -q
+if errorlevel 1 (
+  echo ERROR: Unit tests failed. EXE was not built.
+  exit /b 1
+)
+python -m PyInstaller --noconfirm --clean XGW-Next.spec
 if errorlevel 1 exit /b 1
 if not exist "dist\XGW-Next.exe" (
-    echo ERROR: Build finished without dist\XGW-Next.exe
-    exit /b 1
+  echo ERROR: Missing dist\XGW-Next.exe
+  exit /b 1
 )
-echo Application: %CD%\dist\XGW-Next.exe
-pause
+for %%F in ("dist\XGW-Next.exe") do if %%~zF LEQ 0 (
+  echo ERROR: EXE is empty
+  exit /b 1
+)
+echo.
+echo SUCCESS: %CD%\dist\XGW-Next.exe
+exit /b 0

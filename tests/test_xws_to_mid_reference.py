@@ -1,15 +1,15 @@
-﻿"""End-to-end real-world XWS -> demixed SMF1 export checks."""
+"""End-to-end real-world XWS -> demixed SMF1 export checks."""
 import sys
 from collections import Counter
 from pathlib import Path
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'editor'))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'editor'))
 from midi import Song
 from midi_demix import demix_to_format1
 from xws_import import import_xws
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parent.parent
 FILES = ['A Dream of a Dream3.XWS', 'A Dream of a Dream4.XWS',
          'A Dream of a Dream_ch(1).XWS']
 
@@ -44,4 +44,3 @@ def test_xgworks_v3_v4_midi_content_matches():
     if not older.exists() or not newer.exists():
         pytest.skip('Optional XWS v3/v4 pair unavailable')
     assert signature(import_xws(older)) == signature(import_xws(newer))
-

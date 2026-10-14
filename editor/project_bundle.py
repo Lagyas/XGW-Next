@@ -11,10 +11,10 @@ from multiport_state import save_routing, load_routing
 
 VERSION = 1
 MAX_MEMBER = 64 * 1024 * 1024
-MEMBERS = {'manifest.json', 'song.mid', 'song.mid.xgwclips.json', 'song.mid.xgw-routing.json', 'workspace.json', 'xws-track-properties.json'}
+MEMBERS = {'manifest.json', 'song.mid', 'song.mid.xgwclips.json', 'song.mid.xgw-routing.json', 'workspace.json', 'xws-track-properties.json', 'midi-inputs.json'}
 
 
-def save_project(path, song, routes=None, output_name='', workspace=None, xws_track_properties=None):
+def save_project(path, song, routes=None, output_name='', workspace=None, xws_track_properties=None, midi_inputs=None):
     path = Path(path)
     with tempfile.TemporaryDirectory() as tmp:
         midi = Path(tmp) / 'song.mid'
@@ -28,6 +28,9 @@ def save_project(path, song, routes=None, output_name='', workspace=None, xws_tr
             from xws_track_properties import validate_track_properties
             validated = validate_track_properties(xws_track_properties, len(song.tracks))
             (Path(tmp) / 'xws-track-properties.json').write_text(json.dumps(validated), encoding='utf-8')
+        if midi_inputs is not None:
+            inputs = validate_midi_inputs(midi_inputs, len(song.tracks))
+            (Path(tmp) / 'midi-inputs.json').write_text(json.dumps(inputs, ensure_ascii=False), encoding='utf-8')
         manifest = json.dumps({'format': 'XGW Next', 'version': VERSION, 'midi': 'song.mid'}).encode()
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
@@ -113,3 +116,39 @@ def load_project_track_properties(path, track_count):
             return validate_track_properties(json.loads(archive.read(info)), track_count)
     except (zipfile.BadZipFile, KeyError, OSError, ValueError, UnicodeError) as exc:
         raise MidiError(f'Invalid XWS track properties: {exc}') from exc
+
+
+def validate_midi_inputs(inputs, track_count):
+    """Validate per-track recording endpoints; never silently remap inputs."""
+    if type(inputs) is not dict or type(track_count) is not int or track_count < 0:
+        raise MidiError('Invalid MIDI input routing')
+    validated = {}
+    for track, port in inputs.items():
+        if type(track) is not int or not 0 <= track < track_count:
+            raise MidiError('Invalid MIDI input track')
+        if type(port) is not str or not port.strip() or len(port) > 512:
+            raise MidiError('Invalid MIDI input device')
+        validated[str(track)] = port
+    return validated
+
+def load_project_midi_inputs(path, track_count):
+    """Legacy projects without MIDI IN routing return an empty mapping."""
+    try:
+        with zipfile.ZipFile(path) as archive:
+            if 'midi-inputs.json' not in archive.namelist():
+                return {}
+            info = archive.getinfo('midi-inputs.json')
+            if info.file_size > 65536:
+                raise MidiError('MIDI input routing too large')
+            data = json.loads(archive.read(info))
+            if type(data) is not dict:
+                raise MidiError('Invalid MIDI input routing')
+            converted = {}
+            for key, value in data.items():
+                if type(key) is not str or not key.isascii() or not key.isdecimal() or str(int(key)) != key:
+                    raise MidiError('Invalid MIDI input track index')
+                converted[int(key)] = value
+            validate_midi_inputs(converted, track_count)
+            return converted
+    except (zipfile.BadZipFile, KeyError, ValueError, OSError, UnicodeError) as exc:
+        raise MidiError(f'Invalid MIDI input routing: {exc}') from exc

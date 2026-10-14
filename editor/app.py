@@ -44,6 +44,7 @@ class App:
         self.path = None
         self.history = []
         self.redo_history = []
+        self._undo_project_state = {}
         self.muted_tracks = set()
         self.solo_tracks = set()
         self.muted_channels = set()
@@ -51,6 +52,7 @@ class App:
         self.player = MidiPlayer(on_state=self.playback_state, on_error=self.playback_error)
         self.recorder = MidiRecorder(on_error=self.playback_error)
         self.input_name = tk.StringVar(value='')
+        self.track_input_routes = {}  # Track -> MIDI input device (recording)
         self.record_bpm = tk.StringVar(value='120')
         self.record_latency_ms = tk.StringVar(value='0')
         self.record_input_channel = tk.StringVar(value='All')
@@ -95,11 +97,12 @@ class App:
         self.make_ui()
         self.root.bind_all("<KeyPress-space>", self._space_transport, add="+")
         self._cursor_bookmark_tick = None
-        for number in range(4):
-            self.root.bind_all(f"<KeyPress-KP_{number}>",
-                               lambda event, number=number: self._numpad_transport(event, number), add="+")
-        self.root.after(60000, self._autosave_recovery)
-        self.root.after(50, self._update_playhead)
+        # One handler avoids overlapping/incorrect keypad bindings on Windows.
+        # Do not bind ordinary Home/End/Down/PageDown: they are not keypad keys.
+        self.root.bind_all("<KeyPress>", self._keypad_transport_event, add="+")
+        self._closing = False
+        self._autosave_timer = self.root.after(60000, self._autosave_recovery)
+        self._transport_timer = self.root.after(50, self._update_playhead)
         self.root.protocol("WM_DELETE_WINDOW", self.close_app)
         self.apply_theme()
 
@@ -114,6 +117,7 @@ class App:
         file_menu.add_command(label="Open MIDI...", command=self.open_file)
         file_menu.add_command(label="Save As...", command=self.save_as)
         file_menu.add_command(label="Export demixed MIDI (format 1)...", command=self.export_demixed_midi)
+        file_menu.add_command(label="Export Yamaha XG MIDI...", command=self.export_xg_midi)
         file_menu.add_separator()
         file_menu.add_command(label="Open XGW Project...", command=self.open_project)
         file_menu.add_command(label="Save XGW Project...", command=self.save_project)
@@ -229,7 +233,7 @@ class App:
         ttk.Button(transport_bar, text="Open MIDI...", command=self.open_file).pack(side="left", padx=10)
         ttk.Button(transport_bar, text="Save As...", command=self.save_as).pack(side="left", padx=3)
         ttk.Button(transport_bar, text="MIDI output...", command=self.choose_output).pack(side="left", padx=10)
-        self.sequencer = SequencerView(self.root, on_track=self.select_sequencer_track, on_open=self.open_sequencer_track, on_toggle=self.toggle_track_state, on_instrument=self.edit_track_voice, on_clip=self.edit_sequencer_clip, on_drag=self.drag_sequencer_clip, on_seek=self.seek_to_tick, on_locator=self.set_locator)
+        self.sequencer = SequencerView(self.root, on_track=self.select_sequencer_track, on_open=self.open_sequencer_track, on_toggle=self.toggle_track_state, on_instrument=self.edit_track_voice, on_clip=self.edit_sequencer_clip, on_drag=self.drag_sequencer_clip, on_seek=self.seek_to_tick, on_locator=self.set_locator, on_resize=self.resize_sequencer_clip, on_midi_port=self.configure_track_midi_port)
         self.sequencer.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
         outer = ttk.Panedwindow(self.root, orient=tk.HORIZONTAL)
         outer.pack(fill=tk.BOTH, expand=False, padx=8, pady=8)
@@ -256,6 +260,30 @@ class App:
         self.events.bind("<Double-1>", lambda _: self.edit_event())
         self.status = tk.StringVar(value="Open a MIDI file to begin.")
         ttk.Label(self.root, textvariable=self.status).pack(fill=tk.X, padx=8, pady=(0, 6))
+
+    def resize_sequencer_clip(self, track_index, clip_index, new_end):
+        """Resize a part from its right handle, with validation and Undo."""
+        if self.song is None or self.player.playing:
+            messagebox.showwarning("MIDI clip", "Stop playback before editing.")
+            return
+        from copy import deepcopy
+        from clip_resize import resize_clip_right
+        try:
+            count = resize_clip_right(deepcopy(self.song), track_index, clip_index, new_end)
+            if not count:
+                return
+            self.snapshot()
+            try:
+                resize_clip_right(self.song, track_index, clip_index, new_end)
+            except Exception:
+                self.history.pop()
+                raise
+        except (MidiError, ValueError, IndexError) as exc:
+            messagebox.showerror("MIDI clip", str(exc), parent=self.root)
+            return
+        self.sequencer.draw()
+        self.show_events()
+        self.status.set(f"Resized MIDI part; updated {count} notes. Undo available.")
 
     def drag_sequencer_clip(self, track_index, clip_index, target_track, delta, duplicate, selections=None):
         if self.song is None or self.player.playing:
@@ -645,6 +673,8 @@ class App:
             self.player.set_enabled_channels(enabled)
         self.muted_tracks, self.solo_tracks = next_muted, next_solo
         self.sequencer.set_mix(self.muted_tracks, self.solo_tracks)
+        if hasattr(self, "_sync_sequencer_port_labels"):
+            self._sync_sequencer_port_labels()
 
     def select_sequencer_track(self, index):
         if self.song is not None and 0 <= index < len(self.song.tracks):
@@ -723,7 +753,11 @@ class App:
             if hasattr(self, "sequencer"):
                 self.sequencer.set_playhead(self.playhead_tick, follow=self.player.playing or self.recorder.recording)
         finally:
-            self.root.after(80, self._update_playhead)
+            if not getattr(self, "_closing", False):
+                try:
+                    self._transport_timer = self.root.after(80, self._update_playhead)
+                except tk.TclError:
+                    pass
 
     @staticmethod
     def _safe_locator(value):
@@ -761,7 +795,15 @@ class App:
                 return
         self.playhead_tick = tick
         self.play_start_tick.set(str(tick))
+        # A manual seek must update every open transport surface immediately,
+        # including when playback is stopped (no clock event is required).
+        self.position_text.set(f"Location {format_bbt(self.song, tick)}  ({tick} ticks)")
+        if self.transport_window is not None and self.transport_window.winfo_exists():
+            self.transport_position.set(format_bbt(self.song, tick))
         self.sequencer.set_playhead(tick, follow=True)
+        piano = self.workspace.windows.get('Piano Roll')
+        if piano is not None and piano.winfo_exists():
+            piano.update_playhead()
         if was_playing and not (locator_jump and self.loop_enabled.get() and
                                 tick >= self._safe_locator(self.loop_end.get())):
             self.play_midi()
@@ -824,6 +866,11 @@ class App:
         self.sequencer.locator_left = left
         self.sequencer.locator_right = right
         self.sequencer.draw()
+        # Keep transport range and current cursor consistent after editing R.
+        # Do not silently move the cursor or restart playback here: an active
+        # playback worker owns its clock until an explicit seek/restart.
+        if getattr(self, "transport_window", None) is not None and self.transport_window.winfo_exists():
+            self.transport_position.set(format_bbt(self.song, self.playhead_tick))
 
     def open_transport_window(self):
         if self.transport_window is not None and self.transport_window.winfo_exists():
@@ -991,6 +1038,69 @@ class App:
         ttk.Button(buttons, text='Save', command=save).pack(side='left', padx=5)
         ttk.Button(buttons, text='Cancel', command=dialog.destroy).pack(side='left')
 
+    def configure_track_midi_port(self, index, direction):
+        """Edit a track's MIDI OUT or MIDI IN from the sequencer left panel."""
+        if self.song is None or not 0 <= index < len(self.song.tracks):
+            return
+        if self.player.playing or self.recorder.recording:
+            messagebox.showwarning('MIDI routing', 'Stop playback and recording before changing ports.')
+            return
+        try:
+            ports = available_outputs() if direction == 'out' else available_inputs()
+        except MidiError as exc:
+            messagebox.showerror('MIDI routing', str(exc))
+            return
+        if direction == 'out':
+            current = self.track_routes.get(index, (self.output_name.get(), None))[0]
+            options = ['Default'] + list(ports)
+        else:
+            current = self.track_input_routes.get(index, '')
+            options = ['Off'] + list(ports)
+        dialog = tk.Toplevel(self.root)
+        dialog.title(f'Track {index + 1} MIDI {direction.upper()}')
+        dialog.resizable(False, False)
+        frame = ttk.Frame(dialog, padding=12)
+        frame.pack(fill='both', expand=True)
+        ttk.Label(frame, text=f'{index + 1}: {self.song.tracks[index].name()} – MIDI {direction.upper()}').pack(anchor='w')
+        choice = tk.StringVar(value=current if current in ports else options[0])
+        ttk.Combobox(frame, values=options, textvariable=choice, state='readonly', width=48).pack(pady=8)
+        def apply():
+            from midi_routing import validate_routes
+            if direction == 'out':
+                proposed = dict(self.track_routes)
+                old = proposed.get(index, ('', None))
+                if choice.get() == 'Default':
+                    proposed.pop(index, None)
+                else:
+                    proposed[index] = (choice.get(), old[1])
+                try:
+                    validate_routes(self.song, proposed, self.output_name.get())
+                except MidiError as exc:
+                    messagebox.showerror('MIDI routing', str(exc), parent=dialog)
+                    return
+                self.snapshot()
+                self.track_routes = proposed
+                self.routed_monitor.clear()
+            else:
+                self.snapshot()
+                if choice.get() == 'Off':
+                    self.track_input_routes.pop(index, None)
+                else:
+                    self.track_input_routes[index] = choice.get()
+            self._sync_sequencer_port_labels()
+            self.status.set(f'Track {index + 1} MIDI {direction.upper()}: {choice.get()}')
+            dialog.destroy()
+        ttk.Button(frame, text='Apply', command=apply).pack(side='left')
+        ttk.Button(frame, text='Cancel', command=dialog.destroy).pack(side='left', padx=8)
+
+    def _sync_sequencer_port_labels(self):
+        if not hasattr(self, 'sequencer'):
+            return
+        self.sequencer.midi_out_labels = {
+            i: (port or 'Default') for i, (port, _) in self.track_routes.items()}
+        self.sequencer.midi_in_labels = dict(self.track_input_routes)
+        self.sequencer._draw_track_header()
+
     def configure_track_routes(self):
         """Assign each track to a physical MIDI output and optional channel."""
         if self.song is None:
@@ -1013,6 +1123,7 @@ class App:
         outer = ttk.Frame(window, padding=10)
         outer.pack(fill='both', expand=True)
         ttk.Label(outer, text='Source XWS channel is read-only; output channel override affects playback only.').pack(anchor='w')
+        ttk.Label(outer, text='32 channels = 2 distinct MIDI endpoints; 64 channels = 4 endpoints. Each endpoint has channels 1–16.').pack(anchor='w')
         from xws_track_display import source_channel_labels
         source_labels = source_channel_labels(self.xws_track_properties, len(self.song.tracks))
         tree = ttk.Treeview(outer, columns=('source', 'port', 'channel'), show='tree headings', height=12)
@@ -1045,6 +1156,43 @@ class App:
                 tree.set(item, 'port', port_var.get())
                 tree.set(item, 'channel', channel_var.get())
         ttk.Button(controls, text='Assign selected', command=assign).pack(side='left')
+        def assign_multibank():
+            """Assign selected tracks by global channel across distinct hardware endpoints."""
+            from multiport_devices import assign_global_channels
+            popup = tk.Toplevel(window)
+            popup.title('Multiport MIDI: 16 / 32 / 64 channels')
+            body = ttk.Frame(popup, padding=12)
+            body.pack(fill='both', expand=True)
+            ttk.Label(body, text='Select one independent physical MIDI OUT per 16-channel bank.').grid(row=0, column=0, columnspan=2, sticky='w')
+            endpoint_vars = []
+            for bank in range(4):
+                ttk.Label(body, text=f'Bank {bank + 1} (channels {bank*16+1}–{(bank+1)*16})').grid(row=bank+1, column=0, sticky='w')
+                var = tk.StringVar(value=ports[bank] if bank < len(ports) else 'Off')
+                ttk.Combobox(body, values=['Off'] + list(ports), textvariable=var,
+                             state='readonly', width=40).grid(row=bank+1, column=1, padx=5, pady=3)
+                endpoint_vars.append(var)
+            ttk.Label(body, text='Global channel (1–64):').grid(row=5, column=0, sticky='w')
+            global_channel = tk.StringVar(value='1')
+            ttk.Entry(body, textvariable=global_channel, width=8).grid(row=5, column=1, sticky='w')
+            def commit_bank():
+                selected = [int(i) for i in tree.selection()]
+                if not selected:
+                    messagebox.showwarning('Multiport MIDI', 'Select one or more tracks first.', parent=popup)
+                    return
+                endpoints = [v.get() for v in endpoint_vars if v.get() != 'Off']
+                try:
+                    channel = int(global_channel.get())
+                    updates = assign_global_channels(self.song, {i: channel for i in selected}, endpoints, ports)
+                except (ValueError, MidiError) as exc:
+                    messagebox.showerror('Multiport MIDI', str(exc), parent=popup)
+                    return
+                working.update(updates)
+                for i, (port, wire_channel) in updates.items():
+                    tree.set(str(i), 'port', port)
+                    tree.set(str(i), 'channel', str(wire_channel + 1))
+                popup.destroy()
+            ttk.Button(body, text='Assign selected tracks', command=commit_bank).grid(row=6, column=0, columnspan=2, pady=8)
+        ttk.Button(controls, text='16/32/64 channels…', command=assign_multibank).pack(side='left', padx=6)
         def apply():
             from midi_routing import validate_routes
             try:
@@ -1062,6 +1210,35 @@ class App:
         ttk.Button(footer, text='Reset to single output', command=lambda: (self.track_routes.clear(), window.destroy())).pack(side='left', padx=8)
         ttk.Button(footer, text='Cancel', command=window.destroy).pack(side='right')
 
+    @staticmethod
+    def _keypad_number(event):
+        """Return keypad digit 0, 1, 2, 3 or 5, not main-row digits.
+
+        Windows/Tk can report NumLock-off keypad keys as KP_Insert,
+        KP_End, KP_Down or KP_Next. The Windows virtual keycodes for
+        numeric keypad digits are VK_NUMPAD0..VK_NUMPAD9 with NumLock on.
+        """
+        keysym = str(getattr(event, "keysym", ""))
+        mapping = {
+            "KP_0": 0, "KP_Insert": 0,
+            "KP_1": 1, "KP_End": 1,
+            "KP_2": 2, "KP_Down": 2,
+            "KP_3": 3, "KP_Next": 3,
+            "KP_5": 5, "KP_Begin": 5, "KP_Clear": 5,
+        }
+        if keysym in mapping:
+            return mapping[keysym]
+        keycode = getattr(event, "keycode", None)
+        if keycode in (96, 97, 98, 99, 101):
+            return keycode - 96
+        return None
+
+    def _keypad_transport_event(self, event):
+        number = self._keypad_number(event)
+        if number is None:
+            return None
+        return self._numpad_transport(event, number)
+
     def _numpad_transport(self, event, number):
         """Dedicated numeric keypad transport shortcuts (not top-row digits)."""
         widget = getattr(event, "widget", None)
@@ -1076,12 +1253,17 @@ class App:
             target = self._safe_locator(self.loop_start.get())
         elif number == 3:
             target = self._safe_locator(self.loop_end.get())
-        else:
+        elif number == 5:
+            target = max((int(event.tick) for track in self.song.tracks
+                          for event in track.events), default=0)
+        elif number == 2:
             if self._cursor_bookmark_tick is None:
                 self._cursor_bookmark_tick = max(0, int(self.playhead_tick))
                 self.status.set(f'Cursor position stored: {self._cursor_bookmark_tick} ticks')
                 return "break"
             target = self._cursor_bookmark_tick
+        else:
+            return None
         self.seek_to_tick(target, locator_jump=True)
         return "break"
 
@@ -1180,6 +1362,10 @@ class App:
             if self.record_replace.get() and (not self.record_overdub.get() or not self.punch_enabled.get()):
                 raise MidiError("Replace requires Overdub selected and Punch enabled")
             target = self.selected_track() if self.record_overdub.get() else None
+            if target is not None and target in self.track_input_routes:
+                selected_input = self.track_input_routes[target]
+            else:
+                selected_input = self.input_name.get()
             if self.record_overdub.get() and target is None:
                 raise MidiError("Select a track for overdub")
             punch_start = int(self.punch_start.get()) if self.punch_enabled.get() else None
@@ -1202,7 +1388,7 @@ class App:
             from midi_output import count_in_messages
             _, count_in_duration = count_in_messages(self.song, tick, count_in_bars)
             shared_start = time.monotonic() + 0.3 + count_in_duration if accompaniment else None
-            self.recorder.start(self.input_name.get(), self.song.division, bpm=bpm,
+            self.recorder.start(selected_input, self.song.division, bpm=bpm,
                                 start_tick=tick, punch_start=punch_start, punch_end=punch_end,
                                 song=self.song if self.record_follow_tempo.get() else None,
                                 start_at=shared_start, latency_ms=latency_ms,
@@ -1237,7 +1423,7 @@ class App:
             self._record_target = target
             self._record_replace = self.record_replace.get()
             self._record_punch_range = (punch_start, punch_end)
-            self.status.set(f'Recording MIDI from {self.input_name.get()} at {bpm:g} BPM...')
+            self.status.set(f'Recording MIDI from {selected_input} at {bpm:g} BPM...')
         except (ValueError, MidiError) as exc:
             messagebox.showerror('MIDI recording', str(exc))
 
@@ -1348,6 +1534,7 @@ class App:
             messagebox.showwarning('Clip regions', str(exc))
         self.song, self.path, self.history = song, Path(path), []
         self.redo_history = []
+        self.track_input_routes = {}
         from multiport_state import load_routing
         try:
             self.track_routes = load_routing(self.path, self.song, self.output_name.get())
@@ -1366,6 +1553,8 @@ class App:
         previous = self.selected_track()
         self.sequencer.set_song(self.song)
         self.sequencer.set_mix(self.muted_tracks, self.solo_tracks)
+        if hasattr(self, "_sync_sequencer_port_labels"):
+            self._sync_sequencer_port_labels()
         self.tracks.delete(*self.tracks.get_children())
         self.events.delete(*self.events.get_children())
         if self.song:
@@ -1392,12 +1581,41 @@ class App:
                 piano.destroy()
             else:
                 selected = self.selected_track()
-                piano.track_index = selected if selected is not None else 0
+                target = selected if selected is not None else 0
+                if piano.track_index != target:
+                    # Note indices belong to a specific track; only discard them
+                    # when switching tracks. Same-track edits are reconciled by
+                    # PianoRoll.render() using stable event identities.
+                    piano.selected = None
+                    piano.selected_pairs.clear()
+                piano.track_index = target
                 piano.title(f'Piano Roll — Track {piano.track_index + 1}')
-                piano.selected = None
-                piano.selected_pairs.clear()
                 piano.render()
         self.notify_midi_editors()
+
+    def apply_batch_event_edit(self, selections, delta, duplicate=False, destination_track=None):
+        """Apply a validated Event List edit as one undoable, synchronized change."""
+        from batch_event_ops import edit_events
+        from copy import deepcopy
+        if self.song is None or self.player.playing or self.recorder.recording:
+            return 0
+        # Validate and stage the *entire* edit before creating Undo history.
+        # This also avoids generating different UIDs for copied events on a second pass.
+        selections = list(selections)
+        trial = deepcopy(self.song)
+        count = edit_events(trial, selections, delta, duplicate, destination_track)
+        if not duplicate and delta == 0 and all(
+            destination_track is None or destination_track == track
+            for track, _ in selections
+        ):
+            return 0  # No-op: do not invalidate Redo or mark the song dirty.
+        self.snapshot()
+        self.song.tracks = trial.tracks
+        self.song.dirty = trial.dirty
+        self.shared_note_selection.clear()
+        self.show_events()
+        self.refresh_open_editors()
+        return count
 
     def batch_event_dialog(self):
         """Move or copy selected Event List rows, with one Undo snapshot."""
@@ -1408,8 +1626,6 @@ class App:
         if track is None or not rows:
             messagebox.showinfo("Batch events", "Select one or more Event List rows first.")
             return
-        from batch_event_ops import edit_events
-        from copy import deepcopy
         dialog = tk.Toplevel(self.root)
         dialog.title("Batch move / copy MIDI events")
         dialog.transient(self.root)
@@ -1425,17 +1641,10 @@ class App:
                 selections = [(track, int(i)) for i in rows]
                 target = dest.get() - 1
                 delta = offset.get()
-                edit_events(deepcopy(self.song), selections, delta, duplicate, target)
-                self.snapshot()
-                try:
-                    count = edit_events(self.song, selections, delta, duplicate, target)
-                except Exception:
-                    self.history.pop()
-                    raise
+                count = self.apply_batch_event_edit(selections, delta, duplicate, target)
             except (MidiError, ValueError, tk.TclError) as exc:
                 messagebox.showerror("Batch events", str(exc), parent=dialog)
                 return
-            self.show_events()
             self.status.set(f"{'Copied' if duplicate else 'Moved'} {count} MIDI events")
             dialog.destroy()
         buttons = ttk.Frame(dialog); buttons.pack(pady=12)
@@ -1452,21 +1661,23 @@ class App:
         destination = source + direction
         if not 0 <= destination < len(self.song.tracks):
             return
-        from track_order_ops import move_track
+        from track_order_ops import move_track, remap_track_indices
         try:
-            # Validate the operation on a copy before modifying the active project.
+            # Stage the complete change, including non-SMF metadata, before Undo.
             trial = copy.deepcopy(self.song)
-            move_track(trial, source, destination, self.track_routes, self.xws_track_properties)
-            self.snapshot()
-            self.track_routes, self.xws_track_properties = move_track(
-                self.song, source, destination, self.track_routes, self.xws_track_properties)
-            self.muted_tracks = {destination if i == source else source if i == destination else i
-                                 for i in self.muted_tracks}
-            self.solo_tracks = {destination if i == source else source if i == destination else i
-                                for i in self.solo_tracks}
+            routes, properties = move_track(
+                trial, source, destination, self.track_routes, self.xws_track_properties)
+            count = len(trial.tracks)
+            muted = remap_track_indices(self.muted_tracks, source, destination, count)
+            solo = remap_track_indices(self.solo_tracks, source, destination, count)
         except (MidiError, ValueError) as exc:
             messagebox.showerror("Move track", str(exc))
             return
+        self.snapshot()
+        self.song.tracks = trial.tracks
+        self.song.dirty = trial.dirty
+        self.track_routes, self.xws_track_properties = routes, properties
+        self.muted_tracks, self.solo_tracks = muted, solo
         self.refresh()
         self.tracks.selection_set(str(destination))
         self.tracks.see(str(destination))
@@ -1490,10 +1701,18 @@ class App:
                 event.tick, event.channel() or "-", event.label(), event.description()))
 
     def snapshot(self):
+        from project_undo_state import capture
         self.redo_history.clear()
-        self.history.append(copy.deepcopy(self.song))
+        snapshot = copy.deepcopy(self.song)
+        self.history.append(snapshot)
+        self._undo_project_state[id(snapshot)] = capture(self)
         if len(self.history) > 15:
-            self.history.pop(0)
+            removed = self.history.pop(0)
+            self._undo_project_state.pop(id(removed), None)
+        # Discard sidecar states for invalidated redo snapshots.
+        live = {id(item) for item in self.history}
+        self._undo_project_state = {key: value for key, value in self._undo_project_state.items()
+                                    if key in live}
 
     def edit_event(self):
         track = self.selected_track()
@@ -1566,24 +1785,34 @@ class App:
 
     def undo(self):
         if self.history and self.song is not None:
-            self.redo_history.append(copy.deepcopy(self.song))
+            from project_undo_state import capture, restore
+            current = copy.deepcopy(self.song)
+            self.redo_history.append(current)
+            self._undo_project_state[id(current)] = capture(self)
             if len(self.redo_history) > 15:
-                self.redo_history.pop(0)
-            self.song = self.history.pop()
+                removed = self.redo_history.pop(0)
+                self._undo_project_state.pop(id(removed), None)
+            previous = self.history.pop()
+            restore(self, self._undo_project_state.pop(id(previous), None))
+            self.song = previous
             self.shared_note_selection.clear()
             self.refresh()
-            self.notify_midi_editors()
             self.status.set("Undo completed.")
 
     def redo(self):
         if self.redo_history and self.song is not None:
-            self.history.append(copy.deepcopy(self.song))
+            from project_undo_state import capture, restore
+            current = copy.deepcopy(self.song)
+            self.history.append(current)
+            self._undo_project_state[id(current)] = capture(self)
             if len(self.history) > 15:
-                self.history.pop(0)
-            self.song = self.redo_history.pop()
+                removed = self.history.pop(0)
+                self._undo_project_state.pop(id(removed), None)
+            next_song = self.redo_history.pop()
+            restore(self, self._undo_project_state.pop(id(next_song), None))
+            self.song = next_song
             self.shared_note_selection.clear()
             self.refresh()
-            self.notify_midi_editors()
             self.status.set("Redo completed.")
 
     def notify_midi_editors(self, origin=None):
@@ -1612,6 +1841,17 @@ class App:
             self.status.set(f"Cannot save MIDI output preference: {exc}")
 
     def close_app(self):
+        if getattr(self, "_closing", False):
+            return
+        self._closing = True
+        for timer_name in ("_transport_timer", "_autosave_timer"):
+            timer = getattr(self, timer_name, None)
+            if timer is not None:
+                try:
+                    self.root.after_cancel(timer)
+                except tk.TclError:
+                    pass
+                setattr(self, timer_name, None)
         self.workspace.close_all()
         self.save_preferences()
         self.player.stop()
@@ -1707,21 +1947,27 @@ class App:
 
     def _autosave_recovery(self):
         """Periodically save changed MIDI state without touching the source file."""
+        if getattr(self, "_closing", False):
+            return
         try:
             if self.song is not None and not self.recorder.recording:
                 from project_recovery import write_recovery, snapshot_fingerprint
                 state = self._project_workspace_state()
                 fingerprint = snapshot_fingerprint(self.song, self.track_routes,
-                                                   self.output_name.get(), state)
+                                                   self.output_name.get(), state,
+                                                   midi_inputs=self.track_input_routes)
                 if fingerprint != self._autosave_fingerprint:
                     write_recovery(self.path, self.song, self.track_routes,
-                                   self.output_name.get(), state)
+                                   self.output_name.get(), state,
+                                   xws_track_properties=self.xws_track_properties,
+                                   midi_inputs=self.track_input_routes)
                     self._autosave_fingerprint = fingerprint
         except (OSError, MidiError, ValueError) as exc:
             self.status.set(f'Automatic recovery backup failed: {exc}')
         finally:
             try:
-                self.root.after(60000, self._autosave_recovery)
+                if not getattr(self, "_closing", False):
+                    self._autosave_timer = self.root.after(60000, self._autosave_recovery)
             except tk.TclError:
                 pass
 
@@ -1738,13 +1984,20 @@ class App:
             song, routes = read_recovery(source)
             from project_bundle import load_project_workspace
             recovered_workspace = load_project_workspace(backup)
+            from project_bundle import load_project_midi_inputs
+            recovered_inputs = load_project_midi_inputs(backup, len(song.tracks))
         except (OSError, MidiError) as exc:
             messagebox.showerror('Recovery failed', str(exc))
             return False
         self.song, self.path, self.history = song, Path(source), []
         self.redo_history = []
         self.track_routes = routes
-        self.xws_track_properties = source_properties
+        self.track_input_routes = recovered_inputs
+        from project_bundle import load_project_track_properties
+        try:
+            self.xws_track_properties = load_project_track_properties(backup, len(song.tracks))
+        except (MidiError, OSError):
+            self.xws_track_properties = None
         self._autosave_fingerprint = None
         self.refresh()
         if recovered_workspace:
@@ -1918,12 +2171,15 @@ class App:
             song, routes = load_project(target, self.output_name.get())
             workspace_state = load_project_workspace(target)
             source_properties = load_project_track_properties(target, len(song.tracks))
+            from project_bundle import load_project_midi_inputs
+            input_routes = load_project_midi_inputs(target, len(song.tracks))
         except (MidiError, OSError) as exc:
             messagebox.showerror('Open project failed', str(exc))
             return
         self.song, self.path, self.history = song, Path(target), []
         self.redo_history = []
         self.track_routes = routes
+        self.track_input_routes = input_routes
         self.xws_track_properties = source_properties
         self.routed_monitor.clear()
         self.muted_tracks.clear()
@@ -1956,13 +2212,37 @@ class App:
         try:
             state = self._project_workspace_state()
             save_project(target, self.song, self.track_routes, self.output_name.get(), state,
-                         xws_track_properties=self.xws_track_properties)
+                         xws_track_properties=self.xws_track_properties,
+                         midi_inputs=self.track_input_routes)
             from project_recovery import discard_recovery
             discard_recovery(self.path)
             self._autosave_fingerprint = None
             self.status.set(f'Saved XGW project: {target}')
         except (MidiError, OSError) as exc:
             messagebox.showerror('Save project failed', str(exc))
+
+    def export_xg_midi(self):
+        """Opt-in Yamaha XG export; never changes the currently loaded song."""
+        if self.song is None:
+            return
+        level = simpledialog.askinteger('Yamaha XG export',
+                    'XG Level (1 = SMF0, 2/3 = SMF1):',
+                    initialvalue=2, minvalue=1, maxvalue=3, parent=self.root)
+        if level is None:
+            return
+        target = filedialog.asksaveasfilename(
+            defaultextension='.mid',
+            initialfile=(self.path.stem + '_XG.mid') if self.path else 'export_XG.mid',
+            filetypes=[('MIDI files', '*.mid')])
+        if not target:
+            return
+        try:
+            from xg_export import export_xg
+            prepared = export_xg(self.song, level)
+            prepared.save(target)
+            self.status.set(f'Exported XG Level {level}: {target}')
+        except (MidiError, OSError) as exc:
+            messagebox.showerror('Yamaha XG export failed', str(exc))
 
     def export_demixed_midi(self):
         """Export independent MIDI channels as separate SMF type-1 tracks."""

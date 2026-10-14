@@ -33,3 +33,13 @@ def move_track(song, source, destination, routes=None, xws_properties=None):
         song.tracks = [song.tracks[i] for i in order]
         song.dirty = True
     return new_routes, new_properties
+
+
+def remap_track_indices(indices, source, destination, count):
+    """Preserve track-owned mute/solo flags after an insert-style move."""
+    if any(type(i) is not int or not 0 <= i < count for i in (source, destination)):
+        raise MidiError('Invalid track position')
+    order = list(range(count))
+    order.insert(destination, order.pop(source))
+    inverse = {old: new for new, old in enumerate(order)}
+    return {inverse[i] for i in indices if type(i) is int and 0 <= i < count}

@@ -4,6 +4,7 @@ Pairs note-on/off events per MIDI channel and pitch. Editing uses the
 existing Song.set_event() method and the application's undo snapshots.
 """
 from collections import defaultdict, deque
+from copy import deepcopy
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 from midi import MidiError
@@ -11,6 +12,14 @@ from expressive_quantize import transform as expressive_transform
 from note_ops import insert_note, delete_note, move_note, quantize_notes, quantize_selected_notes, resize_note, transform_notes, delete_notes
 from velocity_ops import set_note_velocities, scale_note_velocities
 from cc_names import cc_label
+from piano_cc_ops import insert_cc
+from piano_pitch_ops import insert_pitch_bend
+from controller_ramp import ramp_points, apply_ramp
+from controller_delete import delete_controller
+from controller_bulk import bulk_controller_edit
+from controller_region import controller_indices_in_range
+from controller_move import move_controller_events
+from controller_transform import transform_controllers
 from meter_grid import grid_lines
 from snap_grid import SNAP_OPTIONS, snapped_tick, snap_ticks
 from editor_cursor import ruler_tick, seek_editor
@@ -42,6 +51,30 @@ def extract_notes(track):
                           start.data[1], on_idx, idx))
     return sorted(notes, key=lambda n: (n[0], n[2], n[3]))
 
+def grid_note_position(x, y, division, snap_option):
+    """Convert scrolled canvas coordinates to a snapped note start and pitch."""
+    if division <= 0 or division & 0x8000:
+        raise MidiError("Beat-grid note drawing requires PPQN time division")
+    if x < KEYBOARD_WIDTH or y < TOP_MARGIN:
+        return None
+    pitch = 127 - int((y - TOP_MARGIN) // NOTE_HEIGHT)
+    if not 0 <= pitch <= 127:
+        return None
+    raw_tick = max(0, round((x - KEYBOARD_WIDTH) * division / PIXELS_PER_BEAT))
+    return snapped_tick(raw_tick, division, snap_option), pitch
+
+def controller_channel(track, notes, selection="Auto"):
+    """Resolve controller drawing channel; Auto uses first paired note or channel 1."""
+    if selection != "Auto":
+        try:
+            channel = int(selection)
+        except (ValueError, TypeError) as exc:
+            raise MidiError("MIDI channel must be 1–16") from exc
+        if not 1 <= channel <= 16:
+            raise MidiError("MIDI channel must be 1–16")
+        return channel
+    return notes[0][3] if notes else 1
+
 def pitch_label(pitch):
     names = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
     return f"{names[pitch % 12]}{pitch // 12 - 1}"
@@ -70,7 +103,11 @@ class PianoRoll(tk.Toplevel):
         self.velocity_canvas.bind("<ButtonRelease-1>", self.velocity_release)
         self.velocity_drag = None
         self.lane_cc = None
-        self.velocity_canvas.bind("<Button-3>", self.choose_lane)
+        self.controller_channel_choice = tk.StringVar(value="Auto")
+        self.selected_controllers = set()
+        self.controller_region_preview = None
+        self.controller_transform_preview = None
+        self.velocity_canvas.bind("<Button-3>", self.controller_context_menu)
         self.xscroll = xscroll
         self.canvas.grid(row=0, column=0, sticky="nsew")
         yscroll.grid(row=0, column=1, sticky="ns")
@@ -78,7 +115,8 @@ class PianoRoll(tk.Toplevel):
         xscroll.grid(row=2, column=0, sticky="ew")
         area.columnconfigure(0, weight=1)
         area.rowconfigure(0, weight=1)
-        self.after(80, self._poll_playhead)
+        self._last_transport_tick = None
+        self._playhead_timer = self.after(80, self._poll_playhead)
         self.canvas.bind("<ButtonPress-1>", self.begin_drag)
         self.canvas.bind("<B1-Motion>", self.drag_motion)
         self.canvas.bind("<ButtonRelease-1>", self.end_drag)
@@ -89,8 +127,16 @@ class PianoRoll(tk.Toplevel):
         self.canvas.bind("<ButtonRelease-3>", self.finish_selection_box)
         self.bind("<Delete>", lambda event: self.delete_selected())
         self.bind("<Control-z>", self.undo_note_edit)
+        self.bind("<Control-y>", self.redo_note_edit)
+        self.bind("<Control-Shift-Z>", self.redo_note_edit)
         self.bind("<Control-a>", self.select_all_notes)
         self.bind("<Control-d>", self.duplicate_selected)
+        self.bind("<Alt-Up>", lambda event: self.nudge_selected_notes(pitch=1))
+        self.bind("<Alt-Down>", lambda event: self.nudge_selected_notes(pitch=-1))
+        self.bind("<Alt-Left>", lambda event: self.nudge_selected_notes(steps=-1))
+        self.bind("<Alt-Right>", lambda event: self.nudge_selected_notes(steps=1))
+        self.bind("<Control-Shift-z>", self.redo_note_edit)
+        self.protocol("WM_DELETE_WINDOW", self.close_editor)
         toolbar = ttk.Frame(self)
         toolbar.pack(fill="x", padx=8, pady=4)
         self.snap_option = tk.StringVar(value="1/16")
@@ -99,6 +145,20 @@ class PianoRoll(tk.Toplevel):
                                       state="readonly", width=7)
         self.snap_box.pack(side="left", padx=(0, 12))
         self.snap_box.bind("<<ComboboxSelected>>", self.change_snap)
+        ttk.Label(toolbar, text="CC channel:").pack(side="left", padx=(0, 3))
+        self.controller_channel_box = ttk.Combobox(
+            toolbar, textvariable=self.controller_channel_choice,
+            values=("Auto",) + tuple(str(i) for i in range(1, 17)),
+            state="readonly", width=5)
+        self.controller_channel_box.pack(side="left", padx=(0, 8))
+        self.controller_channel_box.bind("<<ComboboxSelected>>", self.change_controller_channel)
+        ttk.Button(toolbar, text="CC −10", command=lambda: self.bulk_controller_change(-10)).pack(side="left")
+        ttk.Button(toolbar, text="CC +10", command=lambda: self.bulk_controller_change(10)).pack(side="left")
+        ttk.Button(toolbar, text="Delete CC", command=lambda: self.bulk_controller_change(delete=True)).pack(side="left")
+        ttk.Button(toolbar, text="CC value −1", command=lambda: self.nudge_controller_value(-1)).pack(side="left")
+        ttk.Button(toolbar, text="CC value +1", command=lambda: self.nudge_controller_value(1)).pack(side="left")
+        ttk.Button(toolbar, text="CC ←", command=lambda: self.shift_selected_controllers(-1)).pack(side="left")
+        ttk.Button(toolbar, text="CC →", command=lambda: self.shift_selected_controllers(1)).pack(side="left")
         ttk.Button(toolbar, text="Insert note", command=self.insert_note).pack(side="left")
         ttk.Button(toolbar, text="Delete selected", command=self.delete_selected).pack(side="left")
         ttk.Button(toolbar, text="Select all", command=self.select_all_notes).pack(side="left")
@@ -122,6 +182,8 @@ class PianoRoll(tk.Toplevel):
         ttk.Label(toolbar, text="Vel:").pack(side="left")
         ttk.Entry(toolbar, textvariable=self.human_velocity, width=4).pack(side="left")
         ttk.Button(toolbar, text="Humanize", command=self.apply_humanize).pack(side="left")
+        self.draw_tool = tk.BooleanVar(value=False)
+        ttk.Checkbutton(toolbar, text="Pencil (click empty grid)", variable=self.draw_tool).pack(side="left", padx=(10, 0))
         self.drag_origin = None
         self.selection_origin = None
         self.right_origin = None
@@ -163,19 +225,37 @@ class PianoRoll(tk.Toplevel):
         lane = self.velocity_canvas
         lane.delete("all")
         lane.configure(scrollregion=(0, 0, width, 115))
-        lane.create_text(6, 10, anchor="w", text=("Velocity" if self.lane_cc is None else cc_label(self.lane_cc)) + " ▼", fill="#334155")
+        lane.create_text(6, 10, anchor="w", text=("Velocity" if self.lane_cc is None else ("Pitch Bend" if self.lane_cc == "pitch" else cc_label(self.lane_cc))) + " ▼", fill="#334155")
         lane.create_line(KEYBOARD_WIDTH, 14, width, 14, fill="#94a3b8")
         lane.create_line(KEYBOARD_WIDTH, 109, width, 109, fill="#94a3b8")
+        if self.controller_transform_preview is not None:
+            lane.create_text(KEYBOARD_WIDTH + 10, 28, anchor="w", text=self.controller_transform_preview, fill="#b45309")
+        if self.controller_region_preview is not None:
+            a, b = self.controller_region_preview
+            lane.create_rectangle(min(a, b), 16, max(a, b), 113, fill="#bfdbfe", stipple="gray50", outline="#2563eb", tags=("controller_region",))
         division = self.app.song.division
         if division <= 0 or division & 0x8000:
             return
+        channel = controller_channel(self.app.song.tracks[self.track_index], self.notes,
+                                     self.controller_channel_choice.get())
+        if self.lane_cc == "pitch":
+            lane.create_line(KEYBOARD_WIDTH, 64, width, 64, fill="#94a3b8", dash=(3, 3))
+            for index, event in enumerate(self.app.song.tracks[self.track_index].events):
+                if event.status != 0xe0 | (channel - 1) or len(event.data) != 2:
+                    continue
+                x = KEYBOARD_WIDTH + event.tick / division * PIXELS_PER_BEAT
+                value = event.data[0] | (event.data[1] << 7)
+                y = 109 - value * 90 / 16383
+                lane.create_line(x, 64, x, y, width=3, fill="#ea580c" if index in self.selected_controllers else "#7c3aed", tags=(f"cc_{index}",))
+                lane.create_oval(x-4, y-4, x+4, y+4, fill="#7c3aed", outline="", tags=(f"cc_{index}",))
+            return
         if self.lane_cc is not None:
             for index, event in enumerate(self.app.song.tracks[self.track_index].events):
-                if event.status & 0xf0 != 0xb0 or len(event.data) != 2 or event.data[0] != self.lane_cc:
+                if event.status != 0xb0 | (channel - 1) or len(event.data) != 2 or event.data[0] != self.lane_cc:
                     continue
                 x = KEYBOARD_WIDTH + event.tick / division * PIXELS_PER_BEAT
                 y = 109 - event.data[1] * 90 / 127
-                lane.create_line(x, 109, x, y, width=4, fill="#0d9488", tags=(f"cc_{index}",))
+                lane.create_line(x, 109, x, y, width=4, fill="#ea580c" if index in self.selected_controllers else "#0d9488", tags=(f"cc_{index}",))
                 lane.create_oval(x-4, y-4, x+4, y+4, fill="#0d9488", outline="", tags=(f"cc_{index}",))
             return
         for start, _, _, _, velocity, on_idx, off_idx in self.notes:
@@ -189,9 +269,48 @@ class PianoRoll(tk.Toplevel):
                              fill="#ea580c" if selected else "#2563eb",
                              outline="", tags=(f"velocity_{on_idx}", "velocity"))
 
+    def controller_context_menu(self, event):
+        """Right-click a CC/Pitch point to remove it, or choose a lane."""
+        index = self.cc_target(event) if self.lane_cc is not None else None
+        if index is None:
+            self.choose_lane(event)
+            return
+        menu = tk.Menu(self, tearoff=0)
+        menu.add_command(label="Delete controller event", command=lambda i=index: self.delete_controller_point(i))
+        menu.add_separator()
+        menu.add_command(label="Change controller lane...", command=lambda: self.choose_lane(event))
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def delete_controller_point(self, index):
+        if self.app.player.playing:
+            messagebox.showwarning("Controller", "Stop playback before editing.", parent=self)
+            return
+        try:
+            # Validate before snapshot so an invalid target cannot pollute Undo.
+            events = self.app.song.tracks[self.track_index].events
+            point = events[index]
+            lane = self.lane_cc
+            valid = ((lane == "pitch" and point.status & 0xf0 == 0xe0) or
+                     (type(lane) is int and point.status & 0xf0 == 0xb0 and
+                      len(point.data) == 2 and point.data[0] == lane))
+            if not valid:
+                raise MidiError("Selected event is not in the active controller lane")
+            self.app.snapshot()
+            delete_controller(self.app.song, self.track_index, index, lane)
+            self.selected_controllers.clear()
+            self.render()
+            self.app.show_events()
+            self.info.set("Controller event deleted (Undo: Ctrl+Z)")
+        except (MidiError, IndexError) as exc:
+            messagebox.showerror("Controller", str(exc), parent=self)
+
     def choose_lane(self, event=None):
         menu = tk.Menu(self, tearoff=0)
         menu.add_command(label="Velocity", command=lambda: self.set_lane(None))
+        menu.add_command(label="Pitch Bend (14-bit)", command=lambda: self.set_lane("pitch"))
         menu.add_separator()
         for start in range(0, 128, 16):
             sub = tk.Menu(menu, tearoff=0)
@@ -205,10 +324,93 @@ class PianoRoll(tk.Toplevel):
         finally:
             menu.grab_release()
 
+    def change_controller_channel(self, _event=None):
+        self.selected_controllers.clear()
+        self.render()
+
+    def bulk_controller_change(self, delta=0, delete=False):
+        if self.lane_cc is None or not self.selected_controllers:
+            self.info.set("Ctrl+click controller points to select them first")
+            return
+        if self.app.player.playing:
+            messagebox.showwarning("Controller", "Stop playback before editing.", parent=self)
+            return
+        try:
+            channel = controller_channel(self.app.song.tracks[self.track_index], self.notes, self.controller_channel_choice.get())
+            preview = deepcopy(self.app.song)
+            count = bulk_controller_edit(preview, self.track_index, self.selected_controllers, self.lane_cc, channel, delta, delete)
+            if not count:
+                return
+            self.app.snapshot()
+            self.app.song = preview
+            if delete:
+                self.selected_controllers.clear()
+            self.render()
+            self.app.show_events()
+            self.info.set(f"Edited {count} controller events (Undo: Ctrl+Z)")
+        except MidiError as exc:
+            messagebox.showerror("Controller", str(exc), parent=self)
+
+    def shift_selected_controllers(self, direction):
+        """Move selected controller events one Snap step left/right as one Undo."""
+        if self.lane_cc is None or not self.selected_controllers:
+            self.info.set("Select controller points first (Ctrl+click or Alt+drag)")
+            return
+        if self.app.player.playing:
+            messagebox.showwarning("Controller", "Stop playback before editing.", parent=self)
+            return
+        try:
+            division = self.app.song.division
+            if division <= 0 or division & 0x8000:
+                raise MidiError("Controller move requires PPQN time division")
+            step = snap_ticks(division, self.snap_option.get()) or 1
+            channel = controller_channel(self.app.song.tracks[self.track_index], self.notes, self.controller_channel_choice.get())
+            preview = deepcopy(self.app.song)
+            count = move_controller_events(preview, self.track_index, self.selected_controllers,
+                                           self.lane_cc, channel, direction * step)
+            if not count:
+                return
+            self.app.snapshot()
+            self.app.song = preview
+            self.render()
+            self.app.show_events()
+            self.info.set(f"Moved {count} controller events by {direction * step} ticks (Undo: Ctrl+Z)")
+        except MidiError as exc:
+            messagebox.showerror("Controller move", str(exc), parent=self)
+
+    def apply_controller_transform(self, tick_delta=0, value_delta=0, copy=False):
+        """Preview before snapshot, preserve selected event indices after edit."""
+        if self.lane_cc is None or not self.selected_controllers:
+            return 0
+        if self.app.player.playing:
+            messagebox.showwarning("Controller", "Stop playback before editing.", parent=self)
+            return 0
+        try:
+            channel = controller_channel(self.app.song.tracks[self.track_index], self.notes,
+                                         self.controller_channel_choice.get())
+            preview = deepcopy(self.app.song)
+            count, new_indices = transform_controllers(preview, self.track_index,
+                self.selected_controllers, self.lane_cc, channel, tick_delta, value_delta, copy)
+            if count:
+                self.app.snapshot()
+                self.app.song = preview
+                self.selected_controllers = new_indices
+                self.render()
+                self.app.show_events()
+                self.info.set(f"Edited {count} controller events (Undo: Ctrl+Z)")
+            return count
+        except MidiError as exc:
+            messagebox.showerror("Controller transform", str(exc), parent=self)
+            return 0
+
+    def nudge_controller_value(self, delta):
+        self.apply_controller_transform(value_delta=delta)
+
     def set_lane(self, cc):
-        if cc is not None and (type(cc) is not int or not 0 <= cc <= 127):
+        if cc is not None and cc != "pitch" and (type(cc) is not int or not 0 <= cc <= 127):
             raise MidiError("CC number must be 0–127")
         self.lane_cc = cc
+        self.selected_controllers.clear()
         self.velocity_drag = None
         self.render()
 
@@ -249,7 +451,30 @@ class PianoRoll(tk.Toplevel):
             messagebox.showwarning("Velocity", "Stop playback before editing.", parent=self)
             return
         if self.lane_cc is not None:
-            self.velocity_drag = ("cc", self.cc_target(event))
+            if event.state & 0x0008:  # Alt+drag selects a time range of controllers
+                self.velocity_drag = ("region", self.velocity_canvas.canvasx(event.x), bool(event.state & 0x0004))
+                self.controller_region_preview = (self.velocity_drag[1], self.velocity_drag[1])
+                self.render()
+                return
+            index = self.cc_target(event)
+            if index is not None and index in self.selected_controllers and not (event.state & 0x0008):
+                self.velocity_drag = ("transform", self.velocity_canvas.canvasx(event.x),
+                                      self.velocity_canvas.canvasy(event.y), bool(event.state & 0x0004))
+                return
+            if event.state & 0x0004:  # Ctrl+click toggles point selection
+                if index is not None:
+                    if index in self.selected_controllers:
+                        self.selected_controllers.remove(index)
+                    else:
+                        self.selected_controllers.add(index)
+                    self.render()
+                return
+            if event.state & 0x0001:  # Shift-drag paints a snapped controller ramp
+                self.velocity_drag = ("ramp", self.velocity_canvas.canvasx(event.x),
+                                      self.velocity_canvas.canvasy(event.y))
+                self.info.set("Shift-drag: draw controller ramp (release to apply)")
+            else:
+                self.velocity_drag = ("cc", self.cc_target(event))
             return
         index = self.velocity_target(event)
         if index is None:
@@ -262,28 +487,128 @@ class PianoRoll(tk.Toplevel):
     def velocity_motion(self, event):
         if self.velocity_drag is None:
             return
-        self.info.set(f"Value: {self.velocity_value(event)} (release to apply)")
+        if self.velocity_drag[0] == "region":
+            self.controller_region_preview = (self.velocity_drag[1], self.velocity_canvas.canvasx(event.x))
+            self.render_velocity(self.velocity_canvas.bbox("all")[2] if self.velocity_canvas.bbox("all") else 1100)
+            self.info.set("Alt+drag: select controller events by time")
+        elif self.velocity_drag[0] == "transform":
+            _, x, y, copying = self.velocity_drag
+            division = self.app.song.division
+            if division > 0 and not division & 0x8000:
+                step = snap_ticks(division, self.snap_option.get()) or 1
+                delta = round((self.velocity_canvas.canvasx(event.x) - x) * division / PIXELS_PER_BEAT / step) * step
+                maximum = 16383 if self.lane_cc == "pitch" else 127
+                value_delta = round((y - self.velocity_canvas.canvasy(event.y)) * maximum / 90)
+                self.controller_transform_preview = f"{'Copy' if copying else 'Move'}: {delta:+} ticks, {value_delta:+} value"
+                self.info.set(self.controller_transform_preview)
+        elif self.velocity_drag[0] == "ramp":
+            self.info.set("Controller ramp: release to apply")
+        else:
+            self.info.set(f"Value: {self.velocity_value(event)} (release to apply)")
 
     def velocity_release(self, event):
         if self.velocity_drag is None:
             return
         if self.lane_cc is not None:
-            _, index = self.velocity_drag
-            self.velocity_drag = None
-            if index is None:
-                self.info.set("To insert new CC events, use Controller Editor.")
+            if self.velocity_drag[0] == "transform":
+                _, x, y, copying = self.velocity_drag
+                self.velocity_drag = None
+                self.controller_transform_preview = None
+                division = self.app.song.division
+                if division <= 0 or division & 0x8000:
+                    messagebox.showerror("Controller", "PPQN division required", parent=self)
+                    return
+                step = snap_ticks(division, self.snap_option.get()) or 1
+                delta = round((self.velocity_canvas.canvasx(event.x) - x) * division / PIXELS_PER_BEAT / step) * step
+                maximum = 16383 if self.lane_cc == "pitch" else 127
+                value_delta = round((y - self.velocity_canvas.canvasy(event.y)) * maximum / 90)
+                if delta or value_delta:
+                    self.apply_controller_transform(delta, value_delta, copying)
                 return
-            value = max(0, min(127, round((109 - self.velocity_canvas.canvasy(event.y)) * 127 / 90)))
-            try:
-                current = self.app.song.tracks[self.track_index].events[index]
-                if current.data[1] != value:
+            if self.velocity_drag[0] == "region":
+                _, start_x, additive = self.velocity_drag
+                end_x = self.velocity_canvas.canvasx(event.x)
+                self.velocity_drag = None
+                self.controller_region_preview = None
+                try:
+                    division = self.app.song.division
+                    if division <= 0 or division & 0x8000:
+                        raise MidiError("Controller selection requires PPQN time division")
+                    to_tick = lambda x: max(0, round((x - KEYBOARD_WIDTH) * division / PIXELS_PER_BEAT))
+                    channel = controller_channel(self.app.song.tracks[self.track_index], self.notes, self.controller_channel_choice.get())
+                    found = controller_indices_in_range(self.app.song, self.track_index, self.lane_cc, channel, to_tick(start_x), to_tick(end_x))
+                    if not additive:
+                        self.selected_controllers.clear()
+                    self.selected_controllers.update(found)
+                    self.render()
+                    self.info.set(f"Selected {len(self.selected_controllers)} controller events")
+                except MidiError as exc:
+                    messagebox.showerror("Controller selection", str(exc), parent=self)
+                return
+            if self.velocity_drag[0] == "ramp":
+                _, start_x, start_y = self.velocity_drag
+                self.velocity_drag = None
+                try:
+                    division = self.app.song.division
+                    if division <= 0 or division & 0x8000:
+                        raise MidiError("Controller ramp requires PPQN time division")
+                    step = snap_ticks(division, self.snap_option.get())
+                    if not step:
+                        step = max(1, division // 16)
+                    end_x = self.velocity_canvas.canvasx(event.x)
+                    end_y = self.velocity_canvas.canvasy(event.y)
+                    tick_at = lambda x: snapped_tick(max(0, round((x - KEYBOARD_WIDTH) * division / PIXELS_PER_BEAT)), division, self.snap_option.get())
+                    maximum = 16383 if self.lane_cc == "pitch" else 127
+                    value_at = lambda y: max(0, min(maximum, round((109 - y) * maximum / 90)))
+                    points = ramp_points(tick_at(start_x), tick_at(end_x), value_at(start_y), value_at(end_y), step, maximum)
+                    channel = controller_channel(self.app.song.tracks[self.track_index], self.notes, self.controller_channel_choice.get())
+                    preview = deepcopy(self.app.song)
+                    apply_ramp(preview, self.track_index, self.lane_cc, channel, points)
+                    if preview.tracks[self.track_index].events == self.app.song.tracks[self.track_index].events:
+                        return
                     self.app.snapshot()
-                    self.app.song.set_event(self.track_index, index, data=bytes((self.lane_cc, value)))
+                    self.app.song = preview
                     self.render()
                     self.app.show_events()
+                    self.info.set(f"Controller ramp: {len(points)} points (Undo: Ctrl+Z)")
+                except MidiError as exc:
+                    messagebox.showerror("Controller ramp", str(exc), parent=self)
+                return
+            _, index = self.velocity_drag
+            self.velocity_drag = None
+            pitch_lane = self.lane_cc == "pitch"
+            max_value = 16383 if pitch_lane else 127
+            value = max(0, min(max_value, round((109 - self.velocity_canvas.canvasy(event.y)) * max_value / 90)))
+            try:
+                if index is None:
+                    division = self.app.song.division
+                    if division <= 0 or division & 0x8000:
+                        raise MidiError("CC lane requires PPQN time division")
+                    x = self.velocity_canvas.canvasx(event.x)
+                    raw_tick = max(0, round((x - KEYBOARD_WIDTH) * division / PIXELS_PER_BEAT))
+                    tick = snapped_tick(raw_tick, division, self.snap_option.get())
+                    channel = controller_channel(self.app.song.tracks[self.track_index], self.notes, self.controller_channel_choice.get())
+                    preview = deepcopy(self.app.song)
+                    if pitch_lane:
+                        insert_pitch_bend(preview, self.track_index, tick, value, channel)
+                    else:
+                        insert_cc(preview, self.track_index, tick, self.lane_cc, value, channel)
+                    if preview.tracks[self.track_index].events == self.app.song.tracks[self.track_index].events:
+                        return
+                    self.app.snapshot()
+                    self.app.song = preview
+                else:
+                    current = self.app.song.tracks[self.track_index].events[index]
+                    new_data = bytes((value & 127, value >> 7)) if pitch_lane else bytes((self.lane_cc, value))
+                    if current.data == new_data:
+                        return
+                    preview = deepcopy(self.app.song)
+                    preview.set_event(self.track_index, index, data=new_data)
+                    self.app.snapshot()
+                    self.app.song = preview
+                self.render()
+                self.app.show_events()
             except MidiError as exc:
-                if self.app.history:
-                    self.app.song = self.app.history.pop()
                 messagebox.showerror("Controller", str(exc), parent=self)
             return
         indices, _ = self.velocity_drag
@@ -451,6 +776,18 @@ class PianoRoll(tk.Toplevel):
         self.selected_pairs.clear()
         self.render()
         self.info.set("Last MIDI edit undone.")
+        return "break"
+
+    def redo_note_edit(self, _event=None):
+        """Redo a MIDI edit from the Piano Roll without losing the active lane."""
+        if not self.app.redo_history:
+            return
+        self.app.redo()
+        self.selected = None
+        self.selected_pairs.clear()
+        self.render()
+        self.info.set("Last MIDI edit redone.")
+        return "break"
 
     def scale_selected_velocity(self):
         """Apply percentage velocity scaling to selected Piano Roll notes."""
@@ -504,20 +841,54 @@ class PianoRoll(tk.Toplevel):
         self.info.set(f"{len(self.selected_pairs)} notes selected.")
         return "break"
 
+    def nudge_selected_notes(self, *, pitch=0, steps=0):
+        """Nudge selected notes atomically; preserve selection across redraws."""
+        pairs = self.selected_note_pairs()
+        if not pairs or (not pitch and not steps):
+            return "break"
+        try:
+            ticks = snap_ticks(self.app.song.division, self.snap_option.get()) * steps if steps else 0
+            if not ticks and not pitch:
+                return "break"
+            probe = deepcopy(self.app.song)
+            changed = transform_notes(probe, self.track_index, pairs,
+                                      delta_ticks=ticks, delta_pitch=pitch)
+            if not changed:
+                return "break"
+            self.app.snapshot()
+            transform_notes(self.app.song, self.track_index, pairs,
+                            delta_ticks=ticks, delta_pitch=pitch)
+            self.render()
+            self.publish_note_selection()
+            self.app.show_events()
+            self.app.notify_midi_editors(origin=self)
+            self.info.set(f"Moved {changed} notes (ticks {ticks:+}, pitch {pitch:+}).")
+        except MidiError as exc:
+            messagebox.showerror("Move notes", str(exc), parent=self)
+        return "break"
+
     def duplicate_selected(self, _event=None):
+        """Duplicate the selected notes as one validated, undoable edit."""
         pairs = self.selected_note_pairs()
         if not pairs:
             return "break"
         try:
+            # Check the entire operation before touching history or live MIDI.
+            trial = deepcopy(self.app.song)
+            changed = transform_notes(trial, self.track_index, pairs,
+                                      delta_ticks=self.app.song.division, duplicate=True)
+            if not changed:
+                return "break"
             self.app.snapshot()
             transform_notes(self.app.song, self.track_index, pairs,
                             delta_ticks=self.app.song.division, duplicate=True)
             self.selected_pairs.clear()
             self.render()
+            self.publish_note_selection()
             self.app.show_events()
-            self.info.set(f"Copied {len(pairs)} notes one beat forward.")
+            self.app.notify_midi_editors(origin=self)
+            self.info.set(f"Copied {changed} notes one beat forward.")
         except MidiError as exc:
-            self.app.song = self.app.history.pop()
             messagebox.showerror("Duplicate notes", str(exc), parent=self)
         return "break"
 
@@ -527,7 +898,10 @@ class PianoRoll(tk.Toplevel):
         song = self.app.song
         track = song.tracks[self.track_index]
         self.notes = extract_notes(track)
-        self.selected_pairs.intersection_update({(n[5], n[6]) for n in self.notes})
+        from shared_note_selection import reconcile_editor_pairs
+        self.selected_pairs = reconcile_editor_pairs(
+            self.selected_pairs, self.notes, track.events,
+            getattr(self.app, "shared_note_selection", None), self.track_index)
         division = song.division
         if division & 0x8000:
             self.info.set("SMPTE time division: Piano Roll beat grid not yet supported.")
@@ -580,13 +954,29 @@ class PianoRoll(tk.Toplevel):
         self.render_velocity(width)
         self.update_playhead()
 
+    def close_editor(self):
+        """Cancel the transport poll before destroying the editor window."""
+        timer = getattr(self, "_playhead_timer", None)
+        self._playhead_timer = None
+        if timer is not None:
+            try:
+                self.after_cancel(timer)
+            except tk.TclError:
+                pass
+        self.destroy()
+
     def _poll_playhead(self):
-        if self.winfo_exists():
-            self.update_playhead()
-            self.after(80, self._poll_playhead)
+        self._playhead_timer = None
+        try:
+            if self.winfo_exists():
+                self.update_playhead()
+                self._playhead_timer = self.after(80, self._poll_playhead)
+        except tk.TclError:
+            # A workspace close may destroy the window during the timer callback.
+            return
 
     def update_playhead(self):
-        """Draw and follow the current song position without re-rendering notes."""
+        """Draw the shared song cursor; keep a newly sought position visible."""
         if not self.winfo_exists():
             return
         division = self.app.song.division if self.app.song else 0
@@ -595,7 +985,9 @@ class PianoRoll(tk.Toplevel):
             x = KEYBOARD_WIDTH + self.app.playhead_tick / division * PIXELS_PER_BEAT
             self.canvas.create_line(x, 0, x, TOP_MARGIN + 128 * NOTE_HEIGHT,
                                     fill="#dc2626", width=2, tags="playhead")
-            if self.app.player.playing:
+            tick_changed = self._last_transport_tick != self.app.playhead_tick
+            self._last_transport_tick = self.app.playhead_tick
+            if tick_changed:
                 left = self.canvas.canvasx(0)
                 right = self.canvas.canvasx(self.canvas.winfo_width())
                 if x > right - 60 or x < left + KEYBOARD_WIDTH:
@@ -743,8 +1135,32 @@ class PianoRoll(tk.Toplevel):
                 self.app.song = self.app.history.pop()
             messagebox.showerror("MIDI transform", str(exc), parent=self)
 
+    def draw_note_at(self, event):
+        position = grid_note_position(self.canvas.canvasx(event.x), self.canvas.canvasy(event.y),
+                                      self.app.song.division, self.snap_option.get())
+        if position is None:
+            return
+        tick, pitch = position
+        try:
+            duration = snap_ticks(self.app.song.division, self.snap_option.get())
+            if not duration:
+                duration = max(1, self.app.song.division // 4)
+            self.app.snapshot()
+            insert_note(self.app.song, self.track_index, tick, duration, pitch)
+            self.selected = None
+            self.selected_pairs.clear()
+            self.render()
+            self.app.show_events()
+            self.info.set(f"Drawn {pitch_label(pitch)} at tick {tick} ({duration} ticks).")
+        except MidiError as exc:
+            messagebox.showerror("Draw note", str(exc), parent=self)
+
     def begin_drag(self, event):
         index = self.hit_note()
+        if index is None and self.draw_tool.get():
+            self.drag_origin = None
+            self.draw_note_at(event)
+            return
         if index is None:
             self.drag_origin = None
             return

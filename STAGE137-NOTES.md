@@ -1,0 +1,1 @@
+Stage 137: Y +/- are narrow buttons stacked at the bottom of the vertical scrollbar column. X +/- remain beside the horizontal scrollbar. 100% is at the far lower-right of the horizontal strip. Windows GUI verification pending.

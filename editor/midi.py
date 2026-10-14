@@ -149,16 +149,28 @@ class Song:
         from safe_save import atomic_write
         atomic_write(path, self.to_bytes())
     def set_event(self,track_idx,event_idx,*,tick=None,data=None):
+        """Validate the entire edit before changing the event or dirty flag."""
         e=self.tracks[track_idx].events[event_idx]
-        if tick is not None:
-            if tick<0: raise MidiError('Negative tick')
-            e.tick=tick
+        if tick is not None and (type(tick) is not int or not 0 <= tick <= 0x0fffffff):
+            raise MidiError('Invalid MIDI event tick')
+        replacement = None
         if data is not None:
-            if e.status in (0xff,0xf0,0xf7): raise MidiError('Raw SysEx/meta editing not enabled in this version')
+            if e.status in (0xff,0xf0,0xf7):
+                raise MidiError('Raw SysEx/meta editing not enabled in this version')
             expected=1 if e.status&0xf0 in (0xc0,0xd0) else 2
-            if len(data)!=expected or any(not 0<=v<=127 for v in data): raise MidiError('Invalid MIDI data bytes')
-            e.data=bytes(data)
+            if (not isinstance(data, (bytes, bytearray, list, tuple)) or len(data)!=expected
+                    or any(type(v) is not int or not 0<=v<=127 for v in data)):
+                raise MidiError('Invalid MIDI data bytes')
+            replacement=bytes(data)
+        changed = (tick is not None and tick != e.tick) or (replacement is not None and replacement != e.data)
+        if not changed:
+            return False
+        if tick is not None:
+            e.tick=tick
+        if replacement is not None:
+            e.data=replacement
         self.dirty=True
+        return True
     def transpose(self,track_idx,semitones):
         changes=[]
         for e in self.tracks[track_idx].events:

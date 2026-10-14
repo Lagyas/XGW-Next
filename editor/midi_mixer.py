@@ -9,6 +9,7 @@ from mixer_ops import MIXER_CONTROLLERS, channel_values, set_mixer_batch
 from meter_activity import update_activity_meters
 from mixer_follow import follow_automation
 from mixer_track_sync import destination_for_selection
+from mixer_commit import preview_mixer_commit, mixer_changes
 from xg_mixer_bridge import mixer_channel_snapshot, default_part_assignments, normalize_part_assignments
 
 class MidiMixer(tk.Toplevel):
@@ -27,6 +28,9 @@ class MidiMixer(tk.Toplevel):
         self._meter_hold = [0] * 16
         self._reloading = False
         self._last_follow_tick = None
+        self._meter_after_id = None
+        self._closing = False
+        self._follow_playhead = tk.BooleanVar(value=False)
         self._follow_track_selection = tk.BooleanVar(value=True)
         selected = app.selected_track()
         self.track = tk.IntVar(value=(selected + 1) if selected is not None else 1)
@@ -49,6 +53,7 @@ class MidiMixer(tk.Toplevel):
         ttk.Spinbox(toolbar, from_=0, to=268435455, textvariable=self.tick,
                     width=10).pack(side="left", padx=6)
         ttk.Button(toolbar, text="Reload", command=self.reload).pack(side="left", padx=8)
+        ttk.Checkbutton(toolbar, text="Follow Playhead", variable=self._follow_playhead).pack(side="left", padx=4)
         if not hasattr(app, "xg_part_assignments"):
             app.xg_part_assignments = default_part_assignments()
         self.xg_mode = tk.BooleanVar(value=False)
@@ -109,7 +114,20 @@ class MidiMixer(tk.Toplevel):
             fill="x", padx=12, pady=(0, 12))
         self.reload()
         self.bind("<FocusIn>", lambda _event: self.sync_monitor_mix())
-        self.after(70, self.refresh_meters)
+        self._meter_after_id = self.after(70, self.refresh_meters)
+        self.protocol("WM_DELETE_WINDOW", self.close_mixer)
+
+    def close_mixer(self):
+        if self._closing:
+            return
+        self._closing = True
+        if self._meter_after_id is not None:
+            try:
+                self.after_cancel(self._meter_after_id)
+            except tk.TclError:
+                pass
+            self._meter_after_id = None
+        self.destroy()
 
     def part_assignment(self, channel):
         """Return the explicit Part/device assignment for a mixer channel."""
@@ -175,8 +193,16 @@ class MidiMixer(tk.Toplevel):
 
     def refresh_meters(self):
         """Show recent MIDI traffic, not an audio amplitude measurement."""
-        if not self.winfo_exists():
+        if self._closing or not self.winfo_exists():
             return
+        self._meter_after_id = None
+        if self.app.song is None:
+            self._meter_after_id = self.after(70, self.refresh_meters)
+            return
+        if self._follow_playhead.get() and self.app.player.playing:
+            playhead = max(0, min(0x0fffffff, int(self.app.playhead_tick)))
+            if self.tick.get() != playhead:
+                self.tick.set(playhead)
         if self.app.track_routes:
             routed = self.app.player.routed_activity_snapshot()
             current = tuple(routed.get((self.output_port.get(), ch), 0) for ch in range(16))
@@ -190,7 +216,8 @@ class MidiMixer(tk.Toplevel):
             widget.itemconfigure("bar", fill="#35e06b" if active else "#333333")
         self.sync_selected_track()
         self.follow_playback_controllers()
-        self.after(70, self.refresh_meters)
+        if not self._closing:
+            self._meter_after_id = self.after(70, self.refresh_meters)
 
     def follow_playback_controllers(self):
         """Follow song CC automation without clobbering unsaved fader edits."""
@@ -271,26 +298,26 @@ class MidiMixer(tk.Toplevel):
             self.solo_vars[channel].set(channel - 1 in solo)
 
     def reload(self):
-        if self.app.song is None:
+        if self.app.song is None or self._closing:
             return
+        self._reloading = True
         try:
             tick = self.tick.get()
             values = {channel: (mixer_channel_snapshot(self.app.song, channel, self.part_assignment(channel), tick)[0]
                                 if self.xg_mode.get() else channel_values(self.app.song, channel, tick))
                       for channel in self.controls}
-            self._reloading = True
             for channel, parameters in values.items():
                 for name, value in parameters.items():
                     self.controls[channel][name].set(value)
-            self._reloading = False
             self.baseline = {channel: dict(params) for channel, params in values.items()}
             self._last_follow_tick = None
             self.info.set("Loaded values at selected tick (XG + CC). Apply writes MIDI CC only."
                           if self.xg_mode.get() else
                           "Loaded MIDI CC values at selected tick. Apply writes MIDI CC only.")
         except (MidiError, tk.TclError) as exc:
-            self._reloading = False
             messagebox.showerror("MIDI Mixer", str(exc), parent=self)
+        finally:
+            self._reloading = False
 
     def apply(self):
         if self.app.song is None:
@@ -305,27 +332,15 @@ class MidiMixer(tk.Toplevel):
                 raise MidiError("Invalid destination track")
             if not 0 <= tick <= 0x0fffffff:
                 raise MidiError("Invalid MIDI tick")
-            updates = {}
-            for channel, variables in self.controls.items():
-                changes = {}
-                for name, variable in variables.items():
-                    value = variable.get()
-                    if not 0 <= value <= 127:
-                        raise MidiError(f"CH {channel} {name}: value must be 0–127")
-                    if value != self.baseline.get(channel, {}).get(name):
-                        changes[name] = value
-                if changes:
-                    updates[channel] = changes
+            displayed = {channel: {name: variable.get() for name, variable in variables.items()}
+                         for channel, variables in self.controls.items()}
+            updates = mixer_changes(displayed, self.baseline)
             if not updates:
                 self.info.set("No changes — MIDI file left untouched.")
                 return
+            preview, count = preview_mixer_commit(self.app.song, track_index, updates, tick)
             self.app.snapshot()
-            try:
-                set_mixer_batch(self.app.song, track_index, updates, tick)
-            except Exception:
-                self.app.song = self.app.history.pop()
-                raise
-            count = sum(len(changes) for changes in updates.values())
+            self.app.song = preview
             self.app.show_events()
             self.reload()
             self.app.notify_midi_editors(origin=self)

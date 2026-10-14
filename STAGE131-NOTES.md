@@ -1,0 +1,1 @@
+Stage 131: Moved arrangement horizontal and vertical zoom buttons into the bottom-right scrollbar strip. X/Y magnifier minus/plus buttons and 100% reset. Kept ruler and track header behavior unchanged. Tests: 961 passed, 8 skipped, 136 subtests passed (PYTHONPATH=editor). Windows GUI verification pending.

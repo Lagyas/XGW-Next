@@ -94,3 +94,37 @@ def compare_xws_binary_evidence(before: bytes, after: bytes):
             'after_edit_span': (prefix, len(after)-suffix),
             'changed_chunks': changes,
             's4wt_changes': compare_s4wt_records(before, after)}
+
+
+def corroborate_s4wt_experiments(experiments):
+    """Cross-check independent one-setting XWS comparisons, without decoding bytes.
+
+    Each entry is (before_bytes, after_bytes, track, parameter, before_value,
+    after_value). A stable fixed offset across >=2 different value transitions
+    is evidence only, never proof of the mixer parameter's encoding.
+    """
+    if type(experiments) not in (list, tuple) or len(experiments) < 2:
+        raise ValueError('At least two controlled experiments required')
+    if len(experiments) > 32:
+        raise ValueError('Too many experiments')
+    observations = []
+    for item in experiments:
+        if type(item) not in (list, tuple) or len(item) != 6:
+            raise ValueError('Invalid controlled experiment entry')
+        before, after, track, parameter, old, new = item
+        result = controlled_s4wt_experiment(before, after, track=track,
+                    parameter=parameter, before_value=old, after_value=new)
+        observations.append(result)
+    first = observations[0]
+    if any(r['track'] != first['track'] or r['parameter'] != first['parameter']
+           for r in observations):
+        raise ValueError('Experiments must target the same track and parameter')
+    if len({(r['before_value'], r['after_value']) for r in observations}) < 2:
+        raise ValueError('At least two distinct setting transitions required')
+    candidates = [set(offset for offset, _, _ in r['candidate_offsets'])
+                  if r['controlled_candidate'] else set() for r in observations]
+    stable = sorted(set.intersection(*candidates))
+    return {'track': first['track'], 'parameter': first['parameter'],
+            'experiments': len(observations), 'stable_candidate_offsets': stable,
+            'all_isolated': all(r['controlled_candidate'] for r in observations),
+            'verified_decoder': False}

@@ -55,3 +55,15 @@ class SharedNoteSelection:
 
     def clear(self):
         self.track, self.pairs, self.identities = None, frozenset(), frozenset()
+
+
+def reconcile_editor_pairs(selected_pairs, notes, events, shared, track):
+    """Resolve selected notes after event reordering using stable MIDI event UIDs.
+
+    If a cross-editor UUID selection exists, it is authoritative; otherwise
+    retain only pairs still present in the current note extraction.
+    """
+    available = {(note[5], note[6]) for note in notes}
+    if shared is not None and shared.track == track and shared.identities:
+        return shared.get(track, notes, events)
+    return set(selected_pairs) & available
