@@ -17,8 +17,6 @@ workflow packages the Python/Tkinter prototype for Windows and macOS.
 These are experimental, unsigned builds. Windows SmartScreen or macOS
 Gatekeeper may warn; only proceed if you trust the source. MIDI hardware
 playback and SysEx sending require a compatible connected MIDI interface.
-Build artifacts expire after 14 days. GitHub Actions must be enabled in
-the repository. An artifact appears only after the build succeeds.
 
 ## Goals
 
