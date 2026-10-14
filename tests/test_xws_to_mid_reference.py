@@ -44,3 +44,4 @@ def test_xgworks_v3_v4_midi_content_matches():
     if not older.exists() or not newer.exists():
         pytest.skip('Optional XWS v3/v4 pair unavailable')
     assert signature(import_xws(older)) == signature(import_xws(newer))
+

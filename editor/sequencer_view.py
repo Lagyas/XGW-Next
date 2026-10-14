@@ -1,5 +1,6 @@
 """Arrangement overview for a MIDI song, grouped by track and time."""
 import tkinter as tk
+import time
 from track_voice import used_channels, channel_voice_at
 from xg_voices import voice_label
 from tkinter import ttk
@@ -41,6 +42,18 @@ def follow_scroll_fraction(cursor_x, view_left, view_width, content_width, fixed
         return None
     target_left = cursor_x - view_width * 0.45
     return max(0.0, min(1.0, target_left / (content_width - view_width)))
+
+
+def smooth_follow_fraction(cursor_x, view_left, view_width, content_width,
+                           fixed_width=LEFT_WIDTH, anchor=0.40):
+    """Keep the moving cursor at a stable position in the visible timeline."""
+    if view_width <= fixed_width or content_width <= view_width:
+        return None
+    target = cursor_x - (fixed_width + (view_width - fixed_width) * anchor)
+    target = max(0.0, min(content_width - view_width, target))
+    if abs(target - view_left) < 0.5:
+        return None
+    return target / (content_width - view_width)
 
 
 def keyboard_seek_tick(current, division, key, end_tick=0, shift=False):
@@ -192,6 +205,7 @@ class SequencerView(ttk.Frame):
         self.selected_clips = set()
         self.show_note_preview = True
         self.playhead_tick = 0
+        self._manual_follow_until = 0.0
         self.beat_width = BEAT_WIDTH
         self.snap_option = tk.StringVar(value="1/4")
         self.snap_enabled = tk.BooleanVar(value=True)
@@ -203,7 +217,7 @@ class SequencerView(ttk.Frame):
         grid_box.pack(side="left")
         grid_box.bind("<<ComboboxSelected>>", lambda _event: self.draw())
         self.canvas = tk.Canvas(self, background="#f9fafb", highlightthickness=0)
-        xs = ttk.Scrollbar(self, orient="horizontal", command=self.canvas.xview)
+        xs = ttk.Scrollbar(self, orient="horizontal", command=self._manual_xview)
         ys = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
         self.canvas.configure(xscrollcommand=xs.set, yscrollcommand=ys.set)
         # A separate overlay keeps the track inspector fixed during horizontal follow/scroll.
@@ -221,6 +235,7 @@ class SequencerView(ttk.Frame):
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
         self.canvas.bind("<Button-1>", self.click)
+        xs.bind("<ButtonPress-1>", self._suspend_follow, add="+")
         self.canvas.bind("<Double-Button-1>", self.double_click)
         self.canvas.bind("<B1-Motion>", self.drag_motion)
         self.canvas.bind("<ButtonRelease-1>", self.drag_release)
@@ -234,6 +249,13 @@ class SequencerView(ttk.Frame):
         self.canvas.bind("<KeyPress-s>", lambda event: self.toggle_selected("solo"))
         self.canvas.bind("<KeyPress-Escape>", lambda event: self.clear_solo())
         self.draw()
+
+    def _suspend_follow(self, _event=None):
+        self._manual_follow_until = time.monotonic() + 2.5
+
+    def _manual_xview(self, *args):
+        self._suspend_follow()
+        self.canvas.xview(*args)
 
     def keyboard_seek(self, event):
         """Navigate the playhead from the focused Track View canvas."""
@@ -649,10 +671,10 @@ class SequencerView(ttk.Frame):
         c.create_line(x, 0, x, height, fill="#dc2626", width=3, tags="playhead")
         c.create_polygon(x-9, 0, x+9, 0, x, 15, fill="#dc2626",
                          outline="#7f1d1d", tags="playhead")
-        if follow:
+        if follow and time.monotonic() >= self._manual_follow_until:
             bounds = c.cget("scrollregion").split()
             if len(bounds) == 4:
                 width = c.winfo_width()
-                fraction = follow_scroll_fraction(x, c.canvasx(0), width, float(bounds[2]))
+                fraction = smooth_follow_fraction(x, c.canvasx(0), width, float(bounds[2]))
                 if fraction is not None:
                     c.xview_moveto(fraction)

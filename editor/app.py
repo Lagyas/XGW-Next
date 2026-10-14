@@ -93,6 +93,11 @@ class App:
         self.shared_note_selection = SharedNoteSelection()
         self._autosave_fingerprint = None
         self.make_ui()
+        self.root.bind_all("<KeyPress-space>", self._space_transport, add="+")
+        self._cursor_bookmark_tick = None
+        for number in range(4):
+            self.root.bind_all(f"<KeyPress-KP_{number}>",
+                               lambda event, number=number: self._numpad_transport(event, number), add="+")
         self.root.after(60000, self._autosave_recovery)
         self.root.after(50, self._update_playhead)
         self.root.protocol("WM_DELETE_WINDOW", self.close_app)
@@ -178,7 +183,6 @@ class App:
         transport_menu.add_separator()
         transport_menu.add_command(label='Choose MIDI input...', command=self.choose_input)
         transport_menu.add_command(label='Record', command=self.start_recording)
-        transport_menu.add_command(label='Finish recording', command=self.finish_recording)
         menu.add_cascade(label='Transport', menu=transport_menu)
         self.root.config(menu=menu)
 
@@ -188,7 +192,6 @@ class App:
         ttk.Button(transport_bar, text="Ⅱ Pause", command=self.pause_midi).pack(side="left", padx=3)
         ttk.Button(transport_bar, text="■ Stop", command=self.stop_midi).pack(side="left", padx=3)
         ttk.Button(transport_bar, text="● Record", command=self.start_recording).pack(side="left", padx=3)
-        ttk.Button(transport_bar, text="■ Finish Rec", command=self.finish_recording).pack(side="left", padx=3)
         ttk.Label(transport_bar, text="Start tick:").pack(side="left", padx=(12, 3))
         ttk.Entry(transport_bar, textvariable=self.play_start_tick, width=10).pack(side="left")
         ttk.Label(transport_bar, textvariable=self.position_text).pack(side="left", padx=(8, 3))
@@ -729,14 +732,18 @@ class App:
         except (ValueError, TypeError):
             return 0
 
-    def seek_to_tick(self, tick):
+    def seek_to_tick(self, tick, *, locator_jump=False):
         """Move song cursor; restart playback to keep the MIDI engine in sync."""
         if self.song is None:
             return
         from transport_ops import seek_position
         try:
-            tick = seek_position(tick, self.loop_enabled.get(),
-                                 self.loop_start.get(), self.loop_end.get())
+            if locator_jump:
+                from transport_ops import tick_value
+                tick = tick_value(tick)
+            else:
+                tick = seek_position(tick, self.loop_enabled.get(),
+                                     self.loop_start.get(), self.loop_end.get())
         except MidiError as exc:
             messagebox.showerror('Transport seek', str(exc))
             return
@@ -755,7 +762,8 @@ class App:
         self.playhead_tick = tick
         self.play_start_tick.set(str(tick))
         self.sequencer.set_playhead(tick, follow=True)
-        if was_playing:
+        if was_playing and not (locator_jump and self.loop_enabled.get() and
+                                tick >= self._safe_locator(self.loop_end.get())):
             self.play_midi()
 
     def nudge_transport(self, direction, bars=False):
@@ -835,7 +843,7 @@ class App:
                                ('▶', lambda: self.nudge_transport(1)),
                                ('▶▶', lambda: self.nudge_transport(1, True)),
                                ('● Rec', self.start_recording),
-                               ('■ End Rec', self.finish_recording)):
+                               ):
             ttk.Button(buttons, text=label, command=command).pack(side='left', padx=2)
         self.transport_position = tk.StringVar(value='0001:01:000')
         ttk.Label(panel, textvariable=self.transport_position,
@@ -1053,6 +1061,42 @@ class App:
         ttk.Button(footer, text='Save routing', command=apply).pack(side='left')
         ttk.Button(footer, text='Reset to single output', command=lambda: (self.track_routes.clear(), window.destroy())).pack(side='left', padx=8)
         ttk.Button(footer, text='Cancel', command=window.destroy).pack(side='right')
+
+    def _numpad_transport(self, event, number):
+        """Dedicated numeric keypad transport shortcuts (not top-row digits)."""
+        widget = getattr(event, "widget", None)
+        if widget is not None and widget.winfo_class() in (
+                "Entry", "TEntry", "Text", "TCombobox", "Spinbox", "TSpinbox"):
+            return None
+        if self.song is None or self.recorder.recording:
+            return "break"
+        if number == 0:
+            target = 0
+        elif number == 1:
+            target = self._safe_locator(self.loop_start.get())
+        elif number == 3:
+            target = self._safe_locator(self.loop_end.get())
+        else:
+            if self._cursor_bookmark_tick is None:
+                self._cursor_bookmark_tick = max(0, int(self.playhead_tick))
+                self.status.set(f'Cursor position stored: {self._cursor_bookmark_tick} ticks')
+                return "break"
+            target = self._cursor_bookmark_tick
+        self.seek_to_tick(target, locator_jump=True)
+        return "break"
+
+    def _space_transport(self, event=None):
+        """Space toggles Play/Stop unless the user is typing in a text widget."""
+        widget = getattr(event, "widget", None)
+        if widget is not None:
+            cls = widget.winfo_class()
+            if cls in ("Entry", "TEntry", "Text", "TCombobox", "Spinbox", "TSpinbox"):
+                return None
+        if self.player.playing or self.recorder.recording:
+            self.stop_midi()
+        else:
+            self.play_midi()
+        return "break"
 
     def play_midi(self):
         if self.recorder.recording:
