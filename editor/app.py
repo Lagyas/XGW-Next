@@ -250,6 +250,7 @@ class App:
         self.tracks.column("events", width=65, anchor="e")
         self.tracks.pack(fill=tk.BOTH, expand=True)
         self.tracks.bind("<<TreeviewSelect>>", lambda _: self.on_tree_track_select())
+        self.tracks.bind("<Double-Button-1>", self._tree_track_double_click)
         ttk.Label(right, text="MIDI Events").pack(anchor="w")
         cols = ("tick", "channel", "type", "data")
         self.events = ttk.Treeview(right, columns=cols, show="headings", selectmode="browse")
@@ -710,6 +711,19 @@ class App:
             piano.selected = None
             piano.selected_pairs.clear()
             piano.render()
+
+    def _tree_track_double_click(self, event):
+        """Open the chosen editor when double-clicking a track in the track list."""
+        row_id = self.tracks.identify_row(event.y)
+        if not row_id or self.song is None:
+            return
+        try:
+            index = int(row_id)
+        except ValueError:
+            return
+        if 0 <= index < len(self.song.tracks):
+            self.open_sequencer_track(index)
+            return "break"
 
     def open_sequencer_track(self, index):
         self.select_sequencer_track(index)
