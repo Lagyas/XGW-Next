@@ -118,6 +118,37 @@ def midi2_per_note_pitch_bend(group, channel, note, value):
     first = (0x4 << 28) | (group << 24) | (0x6 << 20) | (channel << 16) | (note << 8)
     return UmpPacket((first, value))
 
+def midi2_poly_pressure(group, channel, note, value):
+    """MIDI 2.0 Polyphonic Key Pressure with 32-bit pressure."""
+    if any(type(v) is not int for v in (group, channel, note, value)):
+        raise MidiError("MIDI 2.0 poly pressure fields must be integers")
+    if not (0 <= group <= 15 and 0 <= channel <= 15 and
+            0 <= note <= 127 and 0 <= value <= 0xffffffff):
+        raise MidiError("MIDI 2.0 poly pressure field out of range")
+    first = (4 << 28) | (group << 24) | (0xa << 20) | (channel << 16) | (note << 8)
+    return UmpPacket((first, value))
+
+
+def midi2_channel_pressure(group, channel, value):
+    """MIDI 2.0 Channel Pressure with 32-bit pressure."""
+    if any(type(v) is not int for v in (group, channel, value)):
+        raise MidiError("MIDI 2.0 channel pressure fields must be integers")
+    if not (0 <= group <= 15 and 0 <= channel <= 15 and 0 <= value <= 0xffffffff):
+        raise MidiError("MIDI 2.0 channel pressure field out of range")
+    first = (4 << 28) | (group << 24) | (0xd << 20) | (channel << 16)
+    return UmpPacket((first, value))
+
+
+def midi2_program_change(group, channel, program):
+    """MIDI 2.0 Program Change without optional bank fields."""
+    if any(type(v) is not int for v in (group, channel, program)):
+        raise MidiError("MIDI 2.0 program fields must be integers")
+    if not (0 <= group <= 15 and 0 <= channel <= 15 and 0 <= program <= 127):
+        raise MidiError("MIDI 2.0 program field out of range")
+    first = (4 << 28) | (group << 24) | (0xc << 20) | (channel << 16)
+    return UmpPacket((first, program << 24))
+
+
 def unpack_ump_stream(data):
     """Decode consecutive UMP packets without discarding message boundaries."""
     if len(data) % 4:

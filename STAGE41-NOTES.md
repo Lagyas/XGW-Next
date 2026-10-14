@@ -1,0 +1,1 @@
+Stage 41: Track View Snap/Grid controls (Off, 1/4, 1/8, 1/16, 1/32, 1/64), snapping of ruler seek and L/R locator placement and dragging, quantized clip move and matching preview. Snap can be disabled for tick precision. Staff editor untouched; no Git operations. Windows GUI/hardware validation deferred.

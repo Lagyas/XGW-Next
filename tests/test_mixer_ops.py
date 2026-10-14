@@ -13,12 +13,51 @@ class MixerOpsTests(unittest.TestCase):
         self.assertEqual(channel_values(self.song, 1)["Pan"], 64)
         self.assertEqual(channel_values(self.song, 1)["Volume"], 100)
 
+    def test_read_rejects_boolean_channel(self):
+        with self.assertRaises(MidiError):
+            channel_values(self.song, True)
+
+    def test_read_rejects_boolean_tick(self):
+        with self.assertRaises(MidiError):
+            channel_values(self.song, 1, False)
+
+    def test_read_rejects_out_of_range_tick(self):
+        with self.assertRaises(MidiError):
+            channel_values(self.song, 1, 0x10000000)
+
+    def test_write_rejects_boolean_track_without_mutation(self):
+        before = self.song.to_bytes()
+        with self.assertRaises(MidiError):
+            set_channel_values(self.song, False, 1, {"Volume": 50})
+        self.assertEqual(self.song.to_bytes(), before)
+
+    def test_write_rejects_boolean_tick_without_mutation(self):
+        before = self.song.to_bytes()
+        with self.assertRaises(MidiError):
+            set_channel_values(self.song, 0, 1, {"Pan": 20}, True)
+        self.assertEqual(self.song.to_bytes(), before)
+
     def test_roundtrip(self):
         set_channel_values(self.song, 0, 2, {"Volume": 75, "Pan": 32}, 240)
         parsed = Song.from_bytes(self.song.to_bytes())
         self.assertEqual(channel_values(parsed, 2, 239)["Volume"], 100)
         self.assertEqual(channel_values(parsed, 2, 240)["Volume"], 75)
         self.assertEqual(channel_values(parsed, 2, 240)["Pan"], 32)
+
+    def test_variation_send_cc94_roundtrip(self):
+        self.assertEqual(channel_values(self.song, 3)["Variation"], 0)
+        set_channel_values(self.song, 0, 3, {"Variation": 78}, 120)
+        events = [e for e in self.song.tracks[0].events if e.status == 0xb2 and e.data == bytes((94, 78))]
+        self.assertEqual(len(events), 1)
+        parsed = Song.from_bytes(self.song.to_bytes())
+        self.assertEqual(channel_values(parsed, 3, 119)["Variation"], 0)
+        self.assertEqual(channel_values(parsed, 3, 120)["Variation"], 78)
+
+    def test_variation_does_not_change_other_sends(self):
+        set_channel_values(self.song, 0, 1, {"Reverb": 50, "Chorus": 35}, 0)
+        set_channel_values(self.song, 0, 1, {"Variation": 100}, 0)
+        values = channel_values(self.song, 1)
+        self.assertEqual((values["Reverb"], values["Chorus"], values["Variation"]), (50, 35, 100))
 
     def test_replace_same_tick(self):
         set_channel_values(self.song, 0, 1, {"Volume": 40})

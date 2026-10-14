@@ -11,11 +11,13 @@ XG_SYSTEM_ON_ADDRESS = (0x00, 0x00, 0x7e)
 XG_SYSTEM_ON_DATA = (0x00,)
 
 def _u7(value, name):
-    if not isinstance(value, int) or not 0 <= value <= 127:
+    if type(value) is not int or not 0 <= value <= 127:
         raise MidiError(f"{name} must be 0..127")
     return value
 
 def parameter_change(address, data, device=0):
+    if not isinstance(address, (tuple, list, bytes)) or not isinstance(data, (tuple, list, bytes)):
+        raise MidiError("XG address and data must be byte sequences")
     if len(address) != 3 or not data:
         raise MidiError("XG address must be 3 bytes and data must not be empty")
     _u7(device, "Device number")
@@ -30,6 +32,8 @@ def system_on(device=0):
 
 def decode_parameter_change(raw):
     """Decode a complete XG parameter change, or return None for other SysEx."""
+    if not isinstance(raw, (bytes, bytearray)):
+        return None
     if (len(raw) < 9 or raw[0] != 0xf0 or raw[-1] != 0xf7
             or raw[1] != YAMAHA_ID or raw[3] != XG_MODEL_ID
             or raw[2] & 0xf0 != 0x10):
@@ -48,7 +52,7 @@ def smf_sysex_to_wire(status, data):
     SMF F0 stores bytes *after* F0. F7 continuation/escape events are not
     standalone messages and are deliberately not sent without reassembly.
     """
-    if status != 0xf0:
+    if type(status) is not int or status != 0xf0 or not isinstance(data, (bytes, bytearray)):
         return None
     if not data or data[-1] != 0xf7:
         return None

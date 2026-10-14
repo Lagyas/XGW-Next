@@ -21,3 +21,17 @@ Hardware compatibility and exact parameter mappings should be verified
 against the manual for each targeted XG module before relying on the
 result. This prototype does not yet implement effect algorithms, full
 instrument definitions, variation sends, drum setup or voice names.
+
+
+Effect type import now respects the selected Yamaha XG Device number (0–15).
+Messages addressed to other XG devices in the same MIDI file are ignored.
+The low-level API retains `device=None` for callers explicitly wanting all devices.
+
+### Effect type save: replace or append
+
+When writing Reverb, Chorus and Variation type messages to a MIDI song,
+the dialog now offers **Yes** to replace matching effect-type SysEx at the
+same tick, on track 1, for the selected XG device; **No** to append three
+messages without removing existing events; or **Cancel** to abort. Other
+SysEx, devices, tracks and positions remain unchanged. This does not edit
+algorithm-specific effect parameters or routing.

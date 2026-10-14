@@ -7,6 +7,9 @@ from note_ops import paired_notes
 def track_clips(track, division, gap_bars=1):
     if division <= 0 or division & 0x8000:
         return []
+    regions = getattr(track, "clip_regions", None)
+    if regions is not None:
+        return list(regions)
     notes = []
     for on_idx, off_idx in paired_notes(track):
         on, off = track.events[on_idx], track.events[off_idx]

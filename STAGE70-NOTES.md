@@ -1,0 +1,1 @@
+Stage 70: Piano Roll and Drum Editor now expose batch velocity scaling (0–400%) for selected notes. Atomic prevalidation and no-op detection before undo snapshot. GUI/hardware not tested. Staff Editor remains paused.

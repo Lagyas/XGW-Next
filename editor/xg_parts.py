@@ -17,6 +17,7 @@ PART_FIELDS = {
     "pan": (0x0e, 0, 127, 64),
     "reverb_send": (0x13, 0, 127, 40),
     "chorus_send": (0x12, 0, 127, 0),
+    "variation_send": (0x14, 0, 127, 0),
 }
 BY_OFFSET = {spec[0]: name for name, spec in PART_FIELDS.items()}
 
@@ -29,6 +30,7 @@ class Part:
     pan: int = 64
     reverb_send: int = 40
     chorus_send: int = 0
+    variation_send: int = 0
 
 class XGParts:
     def __init__(self):
@@ -61,3 +63,29 @@ class XGParts:
             return False
         self.set(part, field, decoded["data"][0])
         return True
+
+
+def parts_from_song(song, through_tick=None):
+    """Reconstruct supported XG Part settings from complete SMF SysEx events.
+
+    Only Yamaha XG parameter-change messages are interpreted. Unknown SysEx,
+    partial F7 continuations and unrelated events are left untouched.
+    Events across tracks are ordered by tick, track index and event order.
+    """
+    if through_tick is not None and (type(through_tick) is not int or through_tick < 0):
+        raise MidiError("Position must be a non-negative integer")
+    from xg_sysex import smf_sysex_to_wire
+    model = XGParts()
+    events = sorted(
+        (event.tick, track_index, event.order, event)
+        for track_index, track in enumerate(song.tracks)
+        for event in track.events
+        if event.status in (0xf0, 0xf7)
+        and (through_tick is None or event.tick <= through_tick)
+    )
+    recognized = 0
+    for _, _, _, event in events:
+        raw = smf_sysex_to_wire(event.status, event.data)
+        if raw is not None and model.apply_sysex(raw):
+            recognized += 1
+    return model, recognized

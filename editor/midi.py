@@ -1,5 +1,6 @@
 """SMF reader/editor/writer. No external dependencies. Preserves untouched files byte-for-byte."""
 from dataclasses import dataclass, field
+from uuid import uuid4
 from pathlib import Path
 import struct
 
@@ -27,6 +28,7 @@ class Event:
     data: bytes
     meta_type: int = -1
     order: int = 0
+    uid: str = field(default_factory=lambda: uuid4().hex, compare=False, repr=False)
     def label(self):
         s = self.status
         if s == 0xff:
@@ -131,7 +133,9 @@ class Song:
         for at,typ,payload in self.extra_chunks:
             if at>=len(self.tracks): out+=typ+struct.pack('>I',len(payload))+payload
         return bytes(out)
-    def save(self,path): Path(path).write_bytes(self.to_bytes())
+    def save(self,path):
+        from safe_save import atomic_write
+        atomic_write(path, self.to_bytes())
     def set_event(self,track_idx,event_idx,*,tick=None,data=None):
         e=self.tracks[track_idx].events[event_idx]
         if tick is not None:

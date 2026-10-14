@@ -23,6 +23,26 @@ class XGSysexTests(unittest.TestCase):
         with self.assertRaises(MidiError):
             parameter_change((0, 0, 0), (128,))
 
+    def test_invalid_parameter_types_are_rejected(self):
+        for address, data, device in [((0, 0, 0), (True,), 0),
+                                      ((0, 0, 0), (1,), True),
+                                      ((0, 0, 0), (1,), 1.0),
+                                      (None, (1,), 0),
+                                      ((0, 0, 0), None, 0)]:
+            with self.subTest(address=address, data=data, device=device):
+                with self.assertRaises(MidiError):
+                    parameter_change(address, data, device)
+
+    def test_decode_malformed_inputs_safely(self):
+        for raw in (None, 5, "F0", [], b"", bytes.fromhex("F0 43 10 4C 00 00 7E 00")):
+            with self.subTest(raw=raw):
+                self.assertIsNone(decode_parameter_change(raw))
+
+    def test_smf_conversion_rejects_non_byte_payload(self):
+        for payload in (None, "43 10 F7", [0x43, 0x10, 0xf7], 3):
+            with self.subTest(payload=payload):
+                self.assertIsNone(smf_sysex_to_wire(0xf0, payload))
+
     def test_smf_sysex_opt_in(self):
         song = Song(0, 480, [Track([
             Event(0, 0xf0, bytes.fromhex("43 10 4C 00 00 7E 00 F7"), order=0),

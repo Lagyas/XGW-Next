@@ -17,6 +17,8 @@ workflow packages the Python/Tkinter prototype for Windows and macOS.
 These are experimental, unsigned builds. Windows SmartScreen or macOS
 Gatekeeper may warn; only proceed if you trust the source. MIDI hardware
 playback and SysEx sending require a compatible connected MIDI interface.
+Build artifacts expire after 14 days. GitHub Actions must be enabled in
+the repository. An artifact appears only after the build succeeds.
 
 ## Goals
 
@@ -55,3 +57,22 @@ Do not commit proprietary Yamaha installers, executables, DLLs, copyrighted soun
 ## License
 
 To be decided before public distribution. Repository is private.
+
+### Live Mixer Mute/Solo (October 2026)
+Mute/Solo in the 16-channel Mixer now changes playback audibility while playing.
+Disabling a channel sends sustain/sostenuto off and all-notes-off, then filters
+subsequent channel MIDI messages. It does not edit the song. Live re-enabling
+resumes subsequent events; notes that began while muted are not reconstructed.
+Windows MIDI hardware/GUI verification is still required.
+
+### Track View keyboard shortcuts (October 2026)
+
+Click inside the Track View arrangement to focus it. Press **M** to toggle Mute
+for the selected track, **S** to toggle Solo, or **Esc** to clear all Solo tracks.
+Muted/non-soloed clips are shown in gray. Track-level Mute/Solo still requires
+stopped playback; MIDI channel Mute/Solo in Mixer supports live switching.
+
+### Current development priority (2026-10-13)
+Staff Editor is on hold by request. Current work prioritizes playback safety,
+Track View/Mixer integration, Yamaha XG parameter handling, and Windows testing.
+Mixer multi-channel Apply now validates the full batch before changing any events.

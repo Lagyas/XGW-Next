@@ -1,0 +1,1 @@
+Stage 42: Track View subdivision grid reflects Snap resolution, hides lines that would be too dense at current zoom, and refreshes after grid selection. Piano Roll Quantize supports 0–100% strength (preserves note duration), using selected notes or entire track. Staff editor untouched; no Git operations. Windows GUI and MIDI hardware validation deferred.

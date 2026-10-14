@@ -1,6 +1,8 @@
 @echo off
 setlocal
 cd /d "%~dp0"
+rem Make editor modules available to unittest and application imports.
+set "PYTHONPATH=%~dp0editor"
 py -3.12 -m venv .venv
 if errorlevel 1 exit /b 1
 call .venv\Scripts\activate.bat

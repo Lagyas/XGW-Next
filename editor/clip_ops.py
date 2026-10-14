@@ -2,6 +2,7 @@
 
 Only notes are edited; controllers, SysEx and tempo remain in place.
 """
+from uuid import uuid4
 from midi import Event, MidiError
 from note_ops import paired_notes
 from arrangement import track_clips
@@ -38,7 +39,8 @@ def edit_clip(song, track_index, clip_index, delta, duplicate=False, destination
         order = max((e.order for e in destination.events), default=0) + 1
         for e in selected:
             destination.events.append(Event(e.tick + delta, e.status, bytes(e.data),
-                                      e.meta_type, order))
+                                      e.meta_type, order,
+                                      uid=e.uid if not duplicate else uuid4().hex))
             order += 1
         if not duplicate:
             for e in selected:

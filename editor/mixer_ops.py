@@ -2,12 +2,13 @@
 from midi import Event, MidiError
 
 MIXER_CONTROLLERS = {"Volume": 7, "Pan": 10, "Expression": 11,
-                     "Reverb": 91, "Chorus": 93}
+                     "Reverb": 91, "Chorus": 93, "Variation": 94}
 MIXER_DEFAULTS = {"Volume": 100, "Pan": 64, "Expression": 127,
-                  "Reverb": 40, "Chorus": 0}
+                  "Reverb": 40, "Chorus": 0, "Variation": 0}
 
 def channel_values(song, channel, tick=0):
-    if not 1 <= channel <= 16 or tick < 0:
+    if (type(channel) is not int or not 1 <= channel <= 16
+            or type(tick) is not int or not 0 <= tick <= 0x0fffffff):
         raise MidiError("Invalid channel or tick")
     result = dict(MIXER_DEFAULTS)
     lookup = {cc: name for name, cc in MIXER_CONTROLLERS.items()}
@@ -23,9 +24,10 @@ def channel_values(song, channel, tick=0):
     return result
 
 def set_channel_values(song, track_index, channel, values, tick=0):
-    if not 0 <= track_index < len(song.tracks) or not 1 <= channel <= 16:
+    if (type(track_index) is not int or not 0 <= track_index < len(song.tracks)
+        or type(channel) is not int or not 1 <= channel <= 16):
         raise MidiError("Invalid track or channel")
-    if not 0 <= tick <= 0x0fffffff:
+    if type(tick) is not int or not 0 <= tick <= 0x0fffffff:
         raise MidiError("Invalid tick")
     if not values or any(name not in MIXER_CONTROLLERS or
                          type(value) is not int or not 0 <= value <= 127
@@ -46,3 +48,27 @@ def set_channel_values(song, track_index, channel, values, tick=0):
             next_order += 1
     song.dirty = True
     return len(values)
+
+
+def set_mixer_batch(song, track_index, updates, tick=0):
+    """Apply several channel-strip edits only after validating the entire batch.
+
+    An invalid later channel must never leave earlier channels partly edited.
+    """
+    if type(track_index) is not int or not 0 <= track_index < len(song.tracks):
+        raise MidiError("Invalid destination track")
+    if type(tick) is not int or not 0 <= tick <= 0x0fffffff:
+        raise MidiError("Invalid MIDI tick")
+    if not isinstance(updates, dict):
+        raise MidiError("Invalid mixer batch")
+    for channel, values in updates.items():
+        if type(channel) is not int or not 1 <= channel <= 16:
+            raise MidiError("Invalid mixer channel")
+        if not isinstance(values, dict) or not values or any(
+            name not in MIXER_CONTROLLERS or type(value) is not int or not 0 <= value <= 127
+            for name, value in values.items()
+        ):
+            raise MidiError("Invalid mixer value")
+    for channel, values in updates.items():
+        set_channel_values(song, track_index, channel, values, tick)
+    return sum(len(values) for values in updates.values())

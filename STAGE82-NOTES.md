@@ -1,0 +1,1 @@
+Stage 82: Punch/Replace checkbox integrated into recording UI. Replace targets selected track and captured channels only. Caveat: notes spanning punch boundaries are not yet split; GUI/hardware validation pending.

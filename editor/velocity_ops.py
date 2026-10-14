@@ -16,3 +16,26 @@ def set_note_velocities(song, track_index, velocities):
         event.data = bytes((event.data[0], velocity))
     song.dirty = True
     return len(velocities)
+
+
+def scale_note_velocities(song, track_index, on_indices, percent, offset=0):
+    """Scale selected note-on velocities, clamp 1..127, validate atomically."""
+    if type(track_index) is not int or not 0 <= track_index < len(song.tracks):
+        raise MidiError('Invalid track')
+    if type(percent) is not int or not 0 <= percent <= 400 or type(offset) is not int or not -127 <= offset <= 127:
+        raise MidiError('Invalid velocity transform')
+    chosen = list(on_indices)
+    valid = {a for a,_ in paired_notes(song.tracks[track_index])}
+    if not chosen or len(set(chosen)) != len(chosen) or any(type(i) is not int or i not in valid for i in chosen):
+        raise MidiError('Invalid note selection')
+    changes = {}
+    for i in chosen:
+        old = song.tracks[track_index].events[i].data[1]
+        changes[i] = max(1,min(127,(old * percent + 50)//100 + offset))
+    if all(song.tracks[track_index].events[i].data[1] == value for i,value in changes.items()):
+        return 0
+    for i,value in changes.items():
+        event = song.tracks[track_index].events[i]
+        event.data = bytes((event.data[0],value))
+    song.dirty = True
+    return len(changes)

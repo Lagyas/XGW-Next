@@ -4,6 +4,9 @@ from tkinter import ttk, messagebox
 from midi import MidiError
 from note_ops import edit_note_event, delete_note_event
 from event_fields import event_fields, encode_fields
+from event_descriptions import describe_event
+from event_list_tools import matches_event, rewrite_xg_parameter
+from xg_sysex import smf_sysex_to_wire, decode_parameter_change
 
 class ListEditor(tk.Toplevel):
     def __init__(self, app, track_index):
@@ -11,8 +14,9 @@ class ListEditor(tk.Toplevel):
         self.app = app
         self.track_index = track_index
         self.title(f"List Editor — Track {track_index + 1}")
-        self.geometry("950x620")
+        self.geometry("1100x620")
         self.filter = tk.StringVar(value="All events")
+        self.search = tk.StringVar(value="")
         header = ttk.Frame(self)
         header.pack(fill="x", padx=10, pady=8)
         ttk.Label(header, text="Event filter:").pack(side="left")
@@ -22,12 +26,16 @@ class ListEditor(tk.Toplevel):
                                   width=21)
         filter_box.pack(side="left", padx=8)
         filter_box.bind("<<ComboboxSelected>>", lambda _: self.refresh())
+        ttk.Label(header, text="Search:").pack(side="left", padx=(12, 2))
+        search_entry = ttk.Entry(header, textvariable=self.search, width=26)
+        search_entry.pack(side="left")
+        search_entry.bind("<Return>", lambda _: self.refresh())
         ttk.Button(header, text="Refresh", command=self.refresh).pack(side="left")
         list_frame = ttk.Frame(self)
         list_frame.pack(fill="both", expand=True, padx=10, pady=(0, 8))
         columns = ("tick", "channel", "type", "data")
-        self.events = ttk.Treeview(list_frame, columns=columns, show="headings", selectmode="browse")
-        for col, width in (("tick", 110), ("channel", 80), ("type", 160), ("data", 530)):
+        self.events = ttk.Treeview(list_frame, columns=columns, show="headings", selectmode="extended")
+        for col, width in (("tick", 110), ("channel", 80), ("type", 160), ("data", 680)):
             self.events.heading(col, text=col.title())
             self.events.column(col, width=width, stretch=col == "data")
         scroll = ttk.Scrollbar(list_frame, orient="vertical", command=self.events.yview)
@@ -44,22 +52,7 @@ class ListEditor(tk.Toplevel):
         self.refresh()
 
     def matches(self, event):
-        kind = self.filter.get()
-        if kind == "All events":
-            return True
-        if kind == "Notes":
-            return event.status & 0xf0 in (0x80, 0x90) and event.status < 0xf0
-        if kind == "Control changes":
-            return event.status & 0xf0 == 0xb0 and event.status < 0xf0
-        if kind == "Program changes":
-            return event.status & 0xf0 == 0xc0 and event.status < 0xf0
-        if kind == "Pitch bend":
-            return event.status & 0xf0 == 0xe0 and event.status < 0xf0
-        if kind == "Aftertouch":
-            return event.status < 0xf0 and event.status & 0xf0 in (0xa0, 0xd0)
-        if kind == "Meta":
-            return event.status == 0xff
-        return event.status in (0xf0, 0xf7)
+        return matches_event(event, self.filter.get(), self.search.get())
 
     def refresh(self):
         previous = self.selected_index()
@@ -70,7 +63,7 @@ class ListEditor(tk.Toplevel):
         for index, event in sorted(enumerate(track.events), key=lambda item: (item[1].tick, item[1].order)):
             if self.matches(event):
                 self.events.insert("", "end", iid=str(index), values=(
-                    event.tick, event.channel() or "-", event.label(), event.description()))
+                    event.tick, event.channel() or "-", event.label(), describe_event(event)))
         if previous is not None and self.events.exists(str(previous)):
             self.events.selection_set(str(previous))
             self.events.see(str(previous))
@@ -88,7 +81,10 @@ class ListEditor(tk.Toplevel):
             return
         event = self.app.song.tracks[self.track_index].events[index]
         if event.status >= 0xf0:
-            messagebox.showinfo("List Editor", "Editing raw SysEx and meta events is not supported yet.", parent=self)
+            if event.status == 0xf0:
+                self.edit_xg_sysex(index, event)
+            else:
+                messagebox.showinfo("List Editor", "Editing raw/unknown SysEx and meta events is not supported.", parent=self)
             return
         dialog = tk.Toplevel(self)
         dialog.title("Edit MIDI event")
@@ -133,6 +129,48 @@ class ListEditor(tk.Toplevel):
                 dialog.destroy()
             except (ValueError, MidiError) as exc:
                 messagebox.showerror("Edit event", str(exc), parent=dialog)
+        ttk.Button(dialog, text="Apply", command=save).pack(pady=10)
+
+    def edit_xg_sysex(self, index, event):
+        decoded = decode_parameter_change(smf_sysex_to_wire(event.status, event.data))
+        if decoded is None:
+            messagebox.showinfo("List Editor", "Only complete Yamaha XG parameter changes can be edited safely.", parent=self)
+            return
+        dialog = tk.Toplevel(self)
+        dialog.title("Edit Yamaha XG SysEx")
+        dialog.transient(self)
+        dialog.grab_set()
+        fields = [
+            ("Absolute tick", str(event.tick)),
+            ("Device (1–16)", str(decoded['device'] + 1)),
+            ("Address (hex, 3 bytes)", bytes(decoded['address']).hex(' ').upper()),
+            ("Data (hex)", decoded['data'].hex(' ').upper()),
+        ]
+        variables = []
+        for label, initial in fields:
+            row = ttk.Frame(dialog)
+            row.pack(fill="x", padx=12, pady=5)
+            ttk.Label(row, text=label, width=28).pack(side="left")
+            var = tk.StringVar(value=initial)
+            ttk.Entry(row, textvariable=var, width=36).pack(side="left")
+            variables.append(var)
+        def save():
+            try:
+                tick = int(variables[0].get())
+                if not 0 <= tick <= 0x0fffffff:
+                    raise ValueError("Tick outside MIDI range")
+                device = int(variables[1].get()) - 1
+                address = bytes.fromhex(variables[2].get())
+                values = bytes.fromhex(variables[3].get())
+                payload = rewrite_xg_parameter(event, address=address, values=values, device=device)
+                if tick != event.tick or payload != event.data:
+                    self.app.snapshot()
+                    self.app.song.set_event(self.track_index, index, tick=tick, data=payload)
+                    self.refresh()
+                    self.app.show_events()
+                dialog.destroy()
+            except (ValueError, MidiError) as exc:
+                messagebox.showerror("Edit XG SysEx", str(exc), parent=dialog)
         ttk.Button(dialog, text="Apply", command=save).pack(pady=10)
 
     def delete_selected(self):
