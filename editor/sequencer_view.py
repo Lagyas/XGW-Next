@@ -10,7 +10,7 @@ from meter_grid import grid_lines
 from transport_ops import MAX_TICK
 from snap_grid import SNAP_OPTIONS, snapped_tick, snap_ticks
 
-ROW_HEIGHT = 42
+ROW_HEIGHT = 64
 LEFT_WIDTH = 230
 BEAT_WIDTH = 28
 HEADER_HEIGHT = 38
@@ -454,33 +454,54 @@ class SequencerView(ttk.Frame):
         self.mouse_wheel(event)
         self._draw_track_header()
 
-    def _track_header_click(self, event):
+    def _header_row_at(self, event):
         if self.song is None:
+            return None
+        row = int((self.canvas.canvasy(event.y) - HEADER_HEIGHT) // self.row_height)
+        return row if 0 <= row < len(self.song.tracks) else None
+
+    def _track_header_click(self, event):
+        row = self._header_row_at(event)
+        if row is None:
             return
-        y = self.canvas.canvasy(event.y)
-        row = int((y - HEADER_HEIGHT) // self.row_height)
-        if not 0 <= row < len(self.song.tracks):
-            return
-        if 155 <= event.x < 185 and self.on_toggle:
-            self.on_toggle(row, "mute")
-        elif 185 <= event.x < 215 and self.on_toggle:
-            self.on_toggle(row, "solo")
-        elif 0 <= event.x < 75 and self.on_midi_port and (y - HEADER_HEIGHT) % self.row_height >= 18:
-            self.on_midi_port(row, "out")
-        elif 75 <= event.x < 150 and self.on_midi_port and (y - HEADER_HEIGHT) % self.row_height >= 18:
-            self.on_midi_port(row, "in")
+        # Delay modal port pickers until the double-click interval expires.
+        # Otherwise the first click steals the second click on macOS.
+        pending = getattr(self, '_header_pending_click', None)
+        if pending is not None:
+            self.after_cancel(pending)
+        self._header_pending_click = None
+        y_in_row = (self.canvas.canvasy(event.y) - HEADER_HEIGHT) % self.row_height
+        direction = ('in' if y_in_row >= 20 and y_in_row < 39 else
+                     'out' if y_in_row >= 39 and y_in_row < 60 else None)
+        if direction is not None and event.x < 168 and self.on_midi_port:
+            self._header_pending_click = self.after(350, lambda r=row, d=direction: self._open_header_port(r, d))
+        elif 176 <= event.x < 215 and y_in_row < 32 and self.on_toggle:
+            self.on_toggle(row, 'mute')
+        elif 176 <= event.x < 215 and self.on_toggle:
+            self.on_toggle(row, 'solo')
         else:
             self.selected_track = row
-            self.draw()
             if self.on_track:
                 self.on_track(row)
+            else:
+                self.draw()
+
+    def _open_header_port(self, row, direction):
+        self._header_pending_click = None
+        if self.on_midi_port:
+            self.on_midi_port(row, direction)
 
     def _track_header_double_click(self, event):
-        if self.song is None:
-            return
-        row = int((self.canvas.canvasy(event.y) - HEADER_HEIGHT) // self.row_height)
-        if 0 <= row < len(self.song.tracks) and event.x < 155 and self.on_open:
-            self.on_open(row)
+        pending = getattr(self, '_header_pending_click', None)
+        if pending is not None:
+            self.after_cancel(pending)
+            self._header_pending_click = None
+        row = self._header_row_at(event)
+        if row is not None:
+            self.selected_track = row
+            if self.on_open:
+                self.on_open(row)
+        return 'break'
 
     def _draw_fixed_ruler(self):
         """Ruler is a viewport overlay: horizontal scrolling only, never vertical."""
@@ -543,29 +564,22 @@ class SequencerView(ttk.Frame):
             c.create_rectangle(0, y, LEFT_WIDTH, y+self.row_height,
                                fill="#dbeafe" if index == self.selected_track else "#f1f5f9",
                                outline="#cbd5e1")
-            c.create_text(10, y+15, anchor="w", text=f"{index+1:02d}  {track.name()[:26]}")
-            channels = sorted({(e.status & 15)+1 for e in track.events
-                               if 0x80 <= e.status <= 0xef})
-            if channels:
-                channel = channels[0]
-                voice = channel_voice_at(self.song, index, channel)
-                subtitle = f"CH {channel} · {voice_label(voice.msb, voice.lsb, voice.program)}"
-            else:
-                subtitle = "CH — · no instrument"
-            c.create_text(10, y+31, anchor="w", text="",
-                          fill="#475569", font=("Arial", 9))
-            for x, kind, labels in ((0, "OUT", self.midi_out_labels),
-                                    (75, "IN", self.midi_in_labels)):
-                c.create_rectangle(x, y+19, x+73, y+39, fill="#ffffff", outline="#94a3b8")
-                c.create_text(x+3, y+25, text=kind, anchor="w", fill="#475569", font=("Arial", 7, "bold"))
+            c.create_text(10, y+12, anchor="w", text=f"{index+1:02d}  {track.name()[:27]}")
+            for yoff, kind, labels in ((20, "IN", self.midi_in_labels),
+                                       (40, "OUT", self.midi_out_labels)):
+                c.create_rectangle(9, y+yoff, 165, y+yoff+18,
+                                   fill="#ffffff", outline="#94a3b8")
+                c.create_text(14, y+yoff+9, text=kind, anchor="w",
+                              fill="#475569", font=("Arial", 8, "bold"))
                 label = labels.get(index, "Default" if kind == "OUT" else "Off")
-                c.create_text(x+27, y+33, text=str(label)[:11], anchor="w", font=("Arial", 8))
-            for x, name, active in ((155,"M",index in self.muted),
-                                    (185,"S",index in self.solo)):
-                c.create_rectangle(x, y+9, x+26, y+32,
+                c.create_text(49, y+yoff+9, text=str(label)[:18],
+                              anchor="w", font=("Arial", 9))
+            for yoff, name, active in ((6, "M", index in self.muted),
+                                       (35, "S", index in self.solo)):
+                c.create_rectangle(177, y+yoff, 214, y+yoff+24,
                                    fill=("#f59e0b" if name == "M" else "#22c55e") if active else "#e2e8f0",
                                    outline="#94a3b8")
-                c.create_text(x+13, y+20, text=name, font=("Arial",10,"bold"))
+                c.create_text(195, y+yoff+12, text=name, font=("Arial", 10, "bold"))
         c.create_line(LEFT_WIDTH-2, 0, LEFT_WIDTH-2, max(1,c.winfo_height()),
                       fill="#64748b", width=2)
 
@@ -633,8 +647,10 @@ class SequencerView(ttk.Frame):
                             self.selected_clips, clicked,
                             ctrl=bool(event.state & 0x0004),
                             shift=bool(event.state & 0x0001))
-                        self.draw()
+                        # Repainting here destroys the clicked Canvas item and
+                        # can prevent Tk from recognizing the second click.
                         if clicked not in self.selected_clips:
+                            self.draw()
                             return
                         self.drag_origin = (row, clip_index, event.x, event.y, x, self.canvas.canvasy(event.y))
                         self.resize_origin = bool(clip_edge_hit(tick, start, end, self.song.division, self.beat_width))
@@ -700,9 +716,12 @@ class SequencerView(ttk.Frame):
         self.canvas.delete("drag-preview")
         if abs(event.x - sx) + abs(event.y - sy) < 5:
             self.selected_track = row
-            self.draw()
-            if self.on_track:
-                self.on_track(row)
+            # Redrawing synchronously destroys the canvas item under the
+            # pointer and Tk may never deliver <Double-Button-1>.
+            pending = getattr(self, '_clip_click_redraw', None)
+            if pending is not None:
+                self.after_cancel(pending)
+            self._clip_click_redraw = self.after(350, self._finish_clip_click)
             return
         if self.song is None or self.on_drag is None:
             return
@@ -729,13 +748,39 @@ class SequencerView(ttk.Frame):
         else:
             self.on_drag(row, clip, target, delta, duplicate)
 
+    def _finish_clip_click(self):
+        self._clip_click_redraw = None
+        self.draw()
+        if self.on_track:
+            self.on_track(self.selected_track)
+
     def double_click(self, event):
+        """Open an editor on a MIDI part, not only on a track header.
+
+        Repainting the canvas on the first click must not discard the
+        second click's target; identify the part from canvas coordinates.
+        """
         row = self._row_at(event)
-        if row is not None and self.on_open:
-            self.suppress_release = True
-            self.drag_origin = None
-            self.canvas.delete("drag-preview")
-            self.on_open(row)
+        if row is None or self.song is None or self.on_open is None:
+            return
+        x = self.canvas.canvasx(event.x)
+        if x < LEFT_WIDTH:
+            return
+        tick = (x - LEFT_WIDTH) / self.beat_width * self.song.division
+        if not any(start <= tick <= max(end, start + self.song.division // 4)
+                   for start, end in track_clips(self.song.tracks[row], self.song.division)):
+            return
+        pending = getattr(self, '_clip_click_redraw', None)
+        if pending is not None:
+            self.after_cancel(pending)
+            self._clip_click_redraw = None
+        self.suppress_release = True
+        self.drag_origin = None
+        self.resize_origin = False
+        self.canvas.delete("drag-preview")
+        self.selected_track = row
+        self.on_open(row)
+        return "break"
 
     def draw(self):
         c = self.canvas
