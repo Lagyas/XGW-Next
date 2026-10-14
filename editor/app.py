@@ -98,6 +98,11 @@ class App:
         self.root.protocol("WM_DELETE_WINDOW", self.close_app)
         self.apply_theme()
 
+    def toggle_note_preview(self):
+        if hasattr(self, "sequencer"):
+            self.sequencer.show_note_preview = self.note_preview_enabled.get()
+            self.sequencer.draw()
+
     def make_ui(self):
         menu = tk.Menu(self.root)
         file_menu = tk.Menu(menu, tearoff=0)
@@ -134,6 +139,10 @@ class App:
         view_menu.add_command(label="Master Track (Tempo / Time Signature)...", command=self.open_master_track)
         view_menu.add_command(label="MIDI Mixer (16 channels)...", command=self.open_midi_mixer)
         view_menu.add_command(label="Shared MIDI channels (track diagnostics)...", command=self.show_shared_channels)
+        self.note_preview_enabled = tk.BooleanVar(value=True)
+        view_menu.add_checkbutton(label="Show MIDI notes in Track View",
+                                  variable=self.note_preview_enabled,
+                                  command=self.toggle_note_preview)
         double_click_menu = tk.Menu(view_menu, tearoff=0)
         for editor_name in ("Piano Roll", "List Editor", "Drum Editor"):
             double_click_menu.add_radiobutton(label=editor_name, variable=self.track_double_click_editor,
@@ -737,6 +746,12 @@ class App:
         was_playing = self.player.playing
         if was_playing:
             self.stop_midi()
+            # Never open a second MIDI output while the previous worker still
+            # owns the port. A failed stop leaves the requested seek unapplied.
+            if not self.player.wait_stopped(2.0):
+                messagebox.showwarning('Transport seek',
+                    'MIDI output is still stopping. Seek was not applied; try again.')
+                return
         self.playhead_tick = tick
         self.play_start_tick.set(str(tick))
         self.sequencer.set_playhead(tick, follow=True)

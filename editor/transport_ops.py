@@ -47,7 +47,10 @@ def elapsed_song_seconds(start_seconds, elapsed_seconds, left_seconds=None, righ
     elapsed = max(0.0, elapsed)
     if left_seconds is None or right_seconds is None:
         return start + elapsed
-    left, right = float(left_seconds), float(right_seconds)
+    try:
+        left, right = float(left_seconds), float(right_seconds)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise MidiError('Invalid loop clock region') from exc
     if not isfinite(left) or not isfinite(right) or not left < right or start >= right:
         raise MidiError('Invalid loop clock region')
     first_leg = right - start

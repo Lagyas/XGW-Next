@@ -1,4 +1,4 @@
-"""End-to-end real-world XWS -> demixed SMF1 export checks."""
+﻿"""End-to-end real-world XWS -> demixed SMF1 export checks."""
 import sys
 from collections import Counter
 from pathlib import Path
@@ -9,7 +9,7 @@ from midi import Song
 from midi_demix import demix_to_format1
 from xws_import import import_xws
 
-ROOT = Path(__file__).resolve().parents[3]
+ROOT = Path(__file__).resolve().parents[1]
 FILES = ['A Dream of a Dream3.XWS', 'A Dream of a Dream4.XWS',
          'A Dream of a Dream_ch(1).XWS']
 

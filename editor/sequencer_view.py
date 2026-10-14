@@ -4,6 +4,7 @@ from track_voice import used_channels, channel_voice_at
 from xg_voices import voice_label
 from tkinter import ttk
 from arrangement import track_clips
+from note_ops import paired_notes
 from meter_grid import grid_lines
 from transport_ops import MAX_TICK
 from snap_grid import SNAP_OPTIONS, snapped_tick, snap_ticks
@@ -137,6 +138,35 @@ def track_spans(song):
         result.append((min(note_ticks), max(note_ticks)) if note_ticks else None)
     return result
 
+def clip_note_preview(track, start, end, division, beat_width, max_notes=2500):
+    """Return clip-relative (x1, x2, normalized_pitch) note geometry.
+
+    Pure display helper: uses matched MIDI note-on/off events without
+    modifying the source track. Notes spanning a clip edge are clipped.
+    """
+    if division <= 0 or division & 0x8000 or end <= start or beat_width <= 0:
+        return []
+    notes = []
+    for on_index, off_index in paired_notes(track):
+        on, off = track.events[on_index], track.events[off_index]
+        if on.tick >= end or off.tick <= start:
+            continue
+        a, b = max(start, on.tick), min(end, max(on.tick + 1, off.tick))
+        if b > a:
+            notes.append((a, b, on.data[0]))
+    if not notes:
+        return []
+    low = min(pitch for _, _, pitch in notes)
+    high = max(pitch for _, _, pitch in notes)
+    span = max(1, high - low)
+    # Cap rendering work for large MIDI files; deterministic sampling.
+    stride = max(1, (len(notes) + max_notes - 1) // max_notes)
+    return [((a - start) * beat_width / division,
+             (b - start) * beat_width / division,
+             (pitch - low) / span)
+            for a, b, pitch in notes[::stride]]
+
+
 class SequencerView(ttk.Frame):
     def __init__(self, parent, on_track=None, on_open=None, on_toggle=None, on_instrument=None, on_clip=None, on_drag=None, on_seek=None, on_locator=None):
         super().__init__(parent)
@@ -160,6 +190,7 @@ class SequencerView(ttk.Frame):
         self.solo = set()
         self.selected_track = 0
         self.selected_clips = set()
+        self.show_note_preview = True
         self.playhead_tick = 0
         self.beat_width = BEAT_WIDTH
         self.snap_option = tk.StringVar(value="1/4")
@@ -175,6 +206,15 @@ class SequencerView(ttk.Frame):
         xs = ttk.Scrollbar(self, orient="horizontal", command=self.canvas.xview)
         ys = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
         self.canvas.configure(xscrollcommand=xs.set, yscrollcommand=ys.set)
+        # A separate overlay keeps the track inspector fixed during horizontal follow/scroll.
+        self.track_header = tk.Canvas(self.canvas, width=LEFT_WIDTH, highlightthickness=0,
+                                      background="#e2e8f0")
+        self.track_header.place(x=0, y=0, relheight=1)
+        self.track_header.lift()
+        self.track_header.bind("<Button-1>", self._track_header_click)
+        self.track_header.bind("<Double-Button-1>", self._track_header_double_click)
+        self.track_header.bind("<MouseWheel>", self._track_header_wheel)
+        self.canvas.configure(yscrollcommand=lambda first, last: (ys.set(first, last), self._draw_track_header()))
         self.canvas.grid(row=0, column=0, sticky="nsew")
         xs.grid(row=1, column=0, sticky="ew")
         ys.grid(row=0, column=1, sticky="ns")
@@ -280,6 +320,71 @@ class SequencerView(ttk.Frame):
     def select_track(self, index):
         self.selected_track = index
         self.draw()
+
+    def _track_header_wheel(self, event):
+        self.mouse_wheel(event)
+        self._draw_track_header()
+
+    def _track_header_click(self, event):
+        if self.song is None:
+            return
+        y = self.canvas.canvasy(event.y)
+        row = int((y - HEADER_HEIGHT) // ROW_HEIGHT)
+        if not 0 <= row < len(self.song.tracks):
+            return
+        if 155 <= event.x < 185 and self.on_toggle:
+            self.on_toggle(row, "mute")
+        elif 185 <= event.x < 215 and self.on_toggle:
+            self.on_toggle(row, "solo")
+        else:
+            self.selected_track = row
+            self.draw()
+            if self.on_track:
+                self.on_track(row)
+
+    def _track_header_double_click(self, event):
+        if self.song is None:
+            return
+        row = int((self.canvas.canvasy(event.y) - HEADER_HEIGHT) // ROW_HEIGHT)
+        if 0 <= row < len(self.song.tracks) and self.on_open:
+            self.on_open(row)
+
+    def _draw_track_header(self):
+        c = self.track_header
+        c.delete("all")
+        if self.song is None:
+            return
+        offset = self.canvas.canvasy(0)
+        c.create_rectangle(0, -offset, LEFT_WIDTH, HEADER_HEIGHT-offset,
+                           fill="#e2e8f0", outline="#cbd5e1")
+        c.create_text(12, 18-offset, text="TRACK / MIDI PARTS", anchor="w",
+                      font=("Arial", 10, "bold"))
+        for index, track in enumerate(self.song.tracks):
+            y = HEADER_HEIGHT + index * ROW_HEIGHT - offset
+            if y + ROW_HEIGHT < 0 or y > c.winfo_height():
+                continue
+            c.create_rectangle(0, y, LEFT_WIDTH, y+ROW_HEIGHT,
+                               fill="#dbeafe" if index == self.selected_track else "#f1f5f9",
+                               outline="#cbd5e1")
+            c.create_text(10, y+15, anchor="w", text=f"{index+1:02d}  {track.name()[:26]}")
+            channels = sorted({(e.status & 15)+1 for e in track.events
+                               if 0x80 <= e.status <= 0xef})
+            if channels:
+                channel = channels[0]
+                voice = channel_voice_at(self.song, index, channel)
+                subtitle = f"CH {channel} · {voice_label(voice.msb, voice.lsb, voice.program)}"
+            else:
+                subtitle = "CH — · no instrument"
+            c.create_text(10, y+31, anchor="w", text=subtitle[:23],
+                          fill="#475569", font=("Arial", 9))
+            for x, name, active in ((155,"M",index in self.muted),
+                                    (185,"S",index in self.solo)):
+                c.create_rectangle(x, y+9, x+26, y+32,
+                                   fill=("#f59e0b" if name == "M" else "#22c55e") if active else "#e2e8f0",
+                                   outline="#94a3b8")
+                c.create_text(x+13, y+20, text=name, font=("Arial",10,"bold"))
+        c.create_line(LEFT_WIDTH-2, 0, LEFT_WIDTH-2, max(1,c.winfo_height()),
+                      fill="#64748b", width=2)
 
     def _row_at(self, event):
         y = self.canvas.canvasy(event.y)
@@ -504,17 +609,33 @@ class SequencerView(ttk.Frame):
                                    fill="#3b82f6" if audible else "#94a3b8",
                                    outline="#f97316" if (index, clip_index) in self.selected_clips else ("#1d4ed8" if audible else "#64748b"),
                                    width=3 if (index, clip_index) in self.selected_clips else 1)
-                c.create_text(x1 + 5, y + ROW_HEIGHT / 2, anchor="w",
-                              text=f"{max(1, (end-start)//division)} beats",
-                              fill="white", font=("Arial", 9))
+                if self.show_note_preview:
+                    top, bottom = y + 11, y + ROW_HEIGHT - 11
+                    for left, right, pitch in clip_note_preview(
+                            track, start, end, division, self.beat_width):
+                        note_x1 = x1 + left
+                        note_x2 = min(x2, x1 + right)
+                        if note_x2 - note_x1 < 0.8:
+                            continue
+                        note_y = bottom - pitch * (bottom - top)
+                        c.create_rectangle(note_x1, note_y - 1.5,
+                                           max(note_x1 + 1, note_x2), note_y + 1.5,
+                                           fill="#eff6ff" if audible else "#e2e8f0",
+                                           outline="", tags="note-preview")
+                else:
+                    c.create_text(x1 + 5, y + ROW_HEIGHT / 2, anchor="w",
+                                  text=f"{max(1, (end-start)//division)} beats",
+                                  fill="white", font=("Arial", 9))
         for tick, label, color in ((self.locator_left, 'L', '#16a34a'),
-                                   (self.locator_right, 'R', '#7c3aed')):
+                                   (self.locator_right, 'R', '#f59e0b')):
             x = LEFT_WIDTH + tick / division * self.beat_width
-            c.create_line(x, HEADER_HEIGHT - 9, x, height, fill=color, dash=(3, 3), tags='locator')
+            c.create_line(x, 0, x, height, fill=color, width=3, tags='locator')
+            c.create_polygon(x-8, 1, x+8, 1, x, 14, fill=color, outline="#1f2937", tags='locator')
             c.create_text(x + 3, HEADER_HEIGHT - 14, text=label, anchor='w', fill=color,
                           font=('Arial', 10, 'bold'), tags='locator')
         c.create_line(LEFT_WIDTH, 0, LEFT_WIDTH, height, fill="#64748b", width=2)
         self.set_playhead(self.playhead_tick)
+        self._draw_track_header()
 
     def set_playhead(self, tick, follow=False):
         """Update the red song cursor on the arrangement timeline."""
@@ -525,7 +646,9 @@ class SequencerView(ttk.Frame):
             return
         x = LEFT_WIDTH + tick / self.song.division * self.beat_width
         height = HEADER_HEIGHT + max(10, len(self.song.tracks)) * ROW_HEIGHT
-        c.create_line(x, 0, x, height, fill="#dc2626", width=2, tags="playhead")
+        c.create_line(x, 0, x, height, fill="#dc2626", width=3, tags="playhead")
+        c.create_polygon(x-9, 0, x+9, 0, x, 15, fill="#dc2626",
+                         outline="#7f1d1d", tags="playhead")
         if follow:
             bounds = c.cget("scrollregion").split()
             if len(bounds) == 4:

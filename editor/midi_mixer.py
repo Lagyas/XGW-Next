@@ -92,12 +92,12 @@ class MidiMixer(tk.Toplevel):
             ttk.Label(strip, text="Volume").pack(pady=(8, 0))
             ttk.Scale(strip, from_=127, to=0, orient="vertical", length=180,
                       variable=variables["Volume"],
-                      command=lambda value, ch=channel: self.live_controller(ch, "Volume", value)).pack(padx=8)
+                      command=lambda value, ch=channel: self.slider_changed(ch, "Volume", value)).pack(padx=8)
             ttk.Label(strip, textvariable=variables["Volume"]).pack()
             ttk.Label(strip, text="Pan").pack(pady=(8, 0))
             ttk.Scale(strip, from_=0, to=127, orient="horizontal", length=92,
                       variable=variables["Pan"],
-                      command=lambda value, ch=channel: self.live_controller(ch, "Pan", value)).pack(padx=5)
+                      command=lambda value, ch=channel: self.slider_changed(ch, "Pan", value)).pack(padx=5)
             ttk.Label(strip, textvariable=variables["Pan"]).pack()
             for name in ("Expression", "Reverb", "Chorus", "Variation"):
                 ttk.Label(strip, text=name).pack(pady=(5, 0))
@@ -147,6 +147,13 @@ class MidiMixer(tk.Toplevel):
             self.app.save_preferences()
             self.info.set("XG Part mapping saved to preferences; MIDI song unchanged.")
         ttk.Button(frame, text="Apply mapping", command=save).grid(row=17, column=0, columnspan=3, pady=10)
+
+    def slider_changed(self, channel, name, value):
+        """Snap ttk.Scale's fractional positions to integer MIDI CC values."""
+        integer = max(0, min(127, round(float(value))))
+        variable = self.controls[channel][name]
+        variable.set(integer)
+        self.live_controller(channel, name, integer)
 
     def live_controller(self, channel, name, value):
         """Audition slider changes immediately; Apply still persists them to SMF."""
