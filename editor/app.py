@@ -637,13 +637,37 @@ class App:
     def select_sequencer_track(self, index):
         if self.song is not None and 0 <= index < len(self.song.tracks):
             self.tracks.selection_set(str(index))
+            self.tracks.see(str(index))
+            self.sequencer.select_track(index)
             self.show_events()
+            self.sync_track_editors(index)
 
     def on_tree_track_select(self):
         self.show_events()
         index = self.selected_track()
         if index is not None:
             self.sequencer.select_track(index)
+            self.sync_track_editors()
+
+    def sync_track_editors(self, selected=None):
+        """Follow Track View in open editors without writing MIDI data."""
+        if self.song is None:
+            return
+        if selected is None:
+            selected = self.selected_track()
+        if selected is None or not 0 <= selected < len(self.song.tracks):
+            return
+        windows = getattr(getattr(self, 'workspace', None), 'windows', {})
+        mixer = windows.get('MIDI Mixer')
+        if mixer is not None and mixer.winfo_exists():
+            mixer.sync_selected_track()
+        piano = windows.get('Piano Roll')
+        if piano is not None and piano.winfo_exists() and piano.track_index != selected:
+            piano.track_index = selected
+            piano.title(f'Piano Roll — Track {selected + 1}')
+            piano.selected = None
+            piano.selected_pairs.clear()
+            piano.render()
 
     def open_sequencer_track(self, index):
         self.select_sequencer_track(index)
@@ -1280,6 +1304,7 @@ class App:
         self.status.set(f"{self.path.name} | Format {song.fmt} | {len(song.tracks)} tracks | division {song.division}")
 
     def refresh(self):
+        previous = self.selected_track()
         self.sequencer.set_song(self.song)
         self.sequencer.set_mix(self.muted_tracks, self.solo_tracks)
         self.tracks.delete(*self.tracks.get_children())
@@ -1288,8 +1313,32 @@ class App:
             for i, track in enumerate(self.song.tracks):
                 self.tracks.insert("", "end", iid=str(i), text=f"{i+1}: {track.name()}", values=(len(track.events),))
             if self.song.tracks:
-                self.tracks.selection_set("0")
+                selected = previous if previous is not None and 0 <= previous < len(self.song.tracks) else 0
+                self.tracks.selection_set(str(selected))
+                self.tracks.see(str(selected))
+                self.sequencer.select_track(selected)
                 self.show_events()
+                self.sync_track_editors()
+        self.refresh_open_editors()
+
+    def refresh_open_editors(self):
+        """Rebind open MIDI views after a song replacement or track edit.
+
+        A window may outlive the previous song; never render an invalid track.
+        """
+        windows = getattr(getattr(self, 'workspace', None), 'windows', {})
+        piano = windows.get('Piano Roll')
+        if piano is not None and piano.winfo_exists():
+            if self.song is None or not self.song.tracks:
+                piano.destroy()
+            else:
+                selected = self.selected_track()
+                piano.track_index = selected if selected is not None else 0
+                piano.title(f'Piano Roll — Track {piano.track_index + 1}')
+                piano.selected = None
+                piano.selected_pairs.clear()
+                piano.render()
+        self.notify_midi_editors()
 
     def batch_event_dialog(self):
         """Move or copy selected Event List rows, with one Undo snapshot."""
@@ -1362,7 +1411,9 @@ class App:
         self.refresh()
         self.tracks.selection_set(str(destination))
         self.tracks.see(str(destination))
+        self.sequencer.select_track(destination)
         self.show_events()
+        self.sync_track_editors()
         self.status.set(f"Moved track {source + 1} to {destination + 1}")
 
     def selected_track(self):

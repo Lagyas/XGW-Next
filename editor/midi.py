@@ -123,7 +123,19 @@ class Song:
                 events.append(Event(final_tick, 0xff, b"", 0x2f,
                                     max((e.order for e in events), default=-1) + 1))
             for ev in events:
-                if ev.tick<last: raise MidiError('Invalid event ordering')
+                if type(ev.tick) is not int or ev.tick < last:
+                    raise MidiError('Invalid event ordering')
+                if type(ev.status) is not int or not (0x80 <= ev.status <= 0xef or ev.status in (0xf0, 0xf7, 0xff)):
+                    raise MidiError('Invalid MIDI event status')
+                if type(ev.data) is not bytes:
+                    raise MidiError('Invalid MIDI event payload')
+                if ev.status == 0xff:
+                    if type(ev.meta_type) is not int or not 0 <= ev.meta_type <= 127:
+                        raise MidiError('Invalid MIDI meta type')
+                elif ev.status < 0xf0:
+                    expected = 1 if ev.status & 0xf0 in (0xc0, 0xd0) else 2
+                    if len(ev.data) != expected or any(value > 127 for value in ev.data):
+                        raise MidiError('Invalid MIDI channel payload')
                 body+=vlq_write(ev.tick-last); last=ev.tick
                 body.append(ev.status)
                 if ev.status==0xff: body.append(ev.meta_type); body+=vlq_write(len(ev.data))

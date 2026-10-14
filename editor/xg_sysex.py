@@ -16,7 +16,7 @@ def _u7(value, name):
     return value
 
 def parameter_change(address, data, device=0):
-    if not isinstance(address, (tuple, list, bytes)) or not isinstance(data, (tuple, list, bytes)):
+    if type(address) not in (tuple, list, bytes) or type(data) not in (tuple, list, bytes):
         raise MidiError("XG address and data must be byte sequences")
     if len(address) != 3 or not data:
         raise MidiError("XG address must be 3 bytes and data must not be empty")

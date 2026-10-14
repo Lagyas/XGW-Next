@@ -37,17 +37,17 @@ class XGParts:
         self.parts = [Part() for _ in range(16)]
 
     def set(self, part, field, value):
-        if not isinstance(part, int) or not 0 <= part < 16:
+        if type(part) is not int or not 0 <= part < 16:
             raise MidiError("Part index must be 0..15")
         if field not in PART_FIELDS:
             raise MidiError("Unsupported XG Part parameter")
         _, low, high, _ = PART_FIELDS[field]
-        if not isinstance(value, int) or not low <= value <= high:
+        if type(value) is not int or not low <= value <= high:
             raise MidiError(f"{field} must be {low}..{high}")
         setattr(self.parts[part], field, value)
 
     def message(self, part, field, device=0):
-        if not 0 <= part < 16 or field not in PART_FIELDS:
+        if type(part) is not int or not 0 <= part < 16 or field not in PART_FIELDS:
             raise MidiError("Invalid part or parameter")
         offset = PART_FIELDS[field][0]
         return parameter_change((0x08, part, offset),

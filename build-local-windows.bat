@@ -12,5 +12,9 @@ python -m unittest discover -s tests -v
 if errorlevel 1 exit /b 1
 python -m PyInstaller --noconfirm --clean --onefile --windowed --name XGW-Next --paths editor --collect-submodules mido.backends --hidden-import mido.backends.rtmidi --collect-submodules rtmidi editor/app.py
 if errorlevel 1 exit /b 1
+if not exist "dist\XGW-Next.exe" (
+    echo ERROR: Build finished without dist\XGW-Next.exe
+    exit /b 1
+)
 echo Application: %CD%\dist\XGW-Next.exe
 pause

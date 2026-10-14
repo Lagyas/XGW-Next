@@ -22,6 +22,14 @@ class LocatorBoundsTests(unittest.TestCase):
     def test_right_at_maximum(self):
         self.assertEqual(move_locator('R', MAX_TICK, 0, 1, 480), (0, MAX_TICK))
 
+    def test_invalid_existing_right_above_midi_limit(self):
+        with self.assertRaises(MidiError):
+            move_locator('L', 10, 0, MAX_TICK + 1, 480)
+
+    def test_invalid_existing_left_above_midi_limit(self):
+        with self.assertRaises(MidiError):
+            move_locator('R', 0, MAX_TICK + 1, MAX_TICK + 2, 480)
+
     def test_invalid_marker(self):
         with self.assertRaises(MidiError):
             move_locator('X', 250, 100, 500, 480)

@@ -74,10 +74,10 @@ def move_locator(which, tick, left, right, division):
     tick = tick_value(tick, 'Locator position')
     left = tick_value(left, 'Left locator')
     right = tick_value(right, 'Right locator')
-    if left >= right:
-        raise MidiError('Right locator must be after left locator')
+    if left >= right or right > MAX_TICK:
+        raise MidiError('Right locator must be after left locator and within MIDI range')
     if which == 'L':
         return min(tick, right - 1), right
     if which == 'R':
-        return left, max(tick, left + 1)
+        return left, min(MAX_TICK, max(tick, left + 1))
     raise MidiError('Unknown locator; expected L or R')

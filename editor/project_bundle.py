@@ -1,7 +1,6 @@
 """Portable XGW Next project archive containing MIDI and validated sidecars."""
 import io
 import json
-import os
 from pathlib import Path
 import tempfile
 import zipfile
@@ -30,19 +29,15 @@ def save_project(path, song, routes=None, output_name='', workspace=None, xws_tr
             validated = validate_track_properties(xws_track_properties, len(song.tracks))
             (Path(tmp) / 'xws-track-properties.json').write_text(json.dumps(validated), encoding='utf-8')
         manifest = json.dumps({'format': 'XGW Next', 'version': VERSION, 'midi': 'song.mid'}).encode()
-        fd, staging = tempfile.mkstemp(prefix=path.name + '.', dir=str(path.parent))
-        os.close(fd)
-        try:
-            with zipfile.ZipFile(staging, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
-                archive.writestr('manifest.json', manifest)
-                for member in sorted(MEMBERS - {'manifest.json'}):
-                    source = Path(tmp) / member
-                    if source.exists():
-                        archive.write(source, member)
-            os.replace(staging, path)
-        finally:
-            if os.path.exists(staging):
-                os.unlink(staging)
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr('manifest.json', manifest)
+            for member in sorted(MEMBERS - {'manifest.json'}):
+                source = Path(tmp) / member
+                if source.exists():
+                    archive.write(source, member)
+        from safe_save import atomic_write
+        atomic_write(path, buffer.getvalue())
     return path
 
 
