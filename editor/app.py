@@ -168,6 +168,10 @@ class App:
         window_menu.add_separator()
         window_menu.add_command(label="Close all editors", command=self.workspace.close_all)
         menu.add_cascade(label="Window", menu=window_menu)
+        track_menu = tk.Menu(menu, tearoff=0)
+        track_menu.add_command(label="Demix by MIDI Channel", command=self.demix_tracks)
+        track_menu.add_command(label="Demix by Note...", command=self.demix_by_note)
+        menu.add_cascade(label="Track", menu=track_menu)
         menu.add_cascade(label="Edit", menu=edit_menu)
         theme_menu = tk.Menu(menu, tearoff=0)
         for name in THEMES:
@@ -2257,6 +2261,72 @@ class App:
             self.status.set(f'Exported XG Level {level}: {target}')
         except (MidiError, OSError) as exc:
             messagebox.showerror('Yamaha XG export failed', str(exc))
+
+    def demix_tracks(self):
+        """Split mixed-channel tracks in the current song, with Undo."""
+        if self.song is None:
+            messagebox.showinfo("Demix", "Open a MIDI file first.")
+            return
+        if self.player.playing or self.recorder.recording:
+            messagebox.showwarning("Demix", "Stop playback/recording before demixing.")
+            return
+        try:
+            from midi_demix import demix_to_format1
+            result = demix_to_format1(self.song)
+        except (MidiError, ValueError) as exc:
+            messagebox.showerror("Demix", str(exc))
+            return
+        if len(result.tracks) == len(self.song.tracks) and self.song.fmt == 1:
+            messagebox.showinfo("Demix", "Tracks are already separated by MIDI channel.")
+            return
+        old_count = len(self.song.tracks)
+        self.snapshot()
+        self.song = result
+        self.track_routes.clear()
+        self.track_input_routes.clear()
+        self.routed_monitor.clear()
+        self.muted_tracks.clear()
+        self.solo_tracks.clear()
+        self.shared_note_selection.clear()
+        self.refresh()
+        self.status.set(f"Demix: {old_count} -> {len(result.tracks)} tracks (SMF format 1). Save As to save.")
+
+    def demix_by_note(self):
+        """Split selected channels by note pitch in the current song, with Undo."""
+        if self.song is None:
+            messagebox.showinfo("Demix by Note", "Open a MIDI file first.")
+            return
+        if self.player.playing or self.recorder.recording:
+            messagebox.showwarning("Demix by Note", "Stop playback/recording before demixing.")
+            return
+        choice = simpledialog.askstring("Demix by Note",
+            "MIDI channels: all, 1-16, or e.g. 1,3,10:",
+            initialvalue="all", parent=self.root)
+        if choice is None:
+            return
+        try:
+            channels = (set(range(16)) if choice.strip().lower() in ("all", "*", "vše", "vse")
+                        else {int(v.strip()) - 1 for v in choice.split(",")})
+            if not channels or any(ch < 0 or ch > 15 for ch in channels):
+                raise ValueError("Choose MIDI channels 1-16 or all")
+            from midi_drum_demix import demix_drums_by_note
+            result, count = demix_drums_by_note(self.song, channels)
+        except (ValueError, MidiError) as exc:
+            messagebox.showerror("Demix by Note", str(exc))
+            return
+        if not count:
+            messagebox.showinfo("Demix by Note", "No note events found on selected channels.")
+            return
+        self.snapshot()
+        self.song = result
+        self.track_routes.clear()
+        self.track_input_routes.clear()
+        self.routed_monitor.clear()
+        self.muted_tracks.clear()
+        self.solo_tracks.clear()
+        self.shared_note_selection.clear()
+        self.refresh()
+        self.status.set(f"Demix by Note: {count} note tracks created. Save As to save.")
 
     def export_demixed_midi(self):
         """Export independent MIDI channels as separate SMF type-1 tracks."""
