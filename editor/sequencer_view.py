@@ -447,8 +447,11 @@ class SequencerView(ttk.Frame):
         self.draw()
 
     def select_track(self, index):
+        changed = self.selected_track != index
         self.selected_track = index
-        self.draw()
+        # Preserve Canvas items when clicking the already-selected track.
+        if changed:
+            self.draw()
 
     def _track_header_wheel(self, event):
         self.mouse_wheel(event)
@@ -647,10 +650,9 @@ class SequencerView(ttk.Frame):
                             self.selected_clips, clicked,
                             ctrl=bool(event.state & 0x0004),
                             shift=bool(event.state & 0x0001))
-                        # Repainting here destroys the clicked Canvas item and
-                        # can prevent Tk from recognizing the second click.
+                        # Preserve the clip Canvas item across both clicks.
+                        self._refresh_clip_selection()
                         if clicked not in self.selected_clips:
-                            self.draw()
                             return
                         self.drag_origin = (row, clip_index, event.x, event.y, x, self.canvas.canvasy(event.y))
                         self.resize_origin = bool(clip_edge_hit(tick, start, end, self.song.division, self.beat_width))
@@ -716,12 +718,9 @@ class SequencerView(ttk.Frame):
         self.canvas.delete("drag-preview")
         if abs(event.x - sx) + abs(event.y - sy) < 5:
             self.selected_track = row
-            # Redrawing synchronously destroys the canvas item under the
-            # pointer and Tk may never deliver <Double-Button-1>.
-            pending = getattr(self, '_clip_click_redraw', None)
-            if pending is not None:
-                self.after_cancel(pending)
-            self._clip_click_redraw = self.after(350, self._finish_clip_click)
+            # Keep the Canvas item alive across the double-click window.
+            if self.on_track:
+                self.on_track(row)
             return
         if self.song is None or self.on_drag is None:
             return
@@ -748,11 +747,25 @@ class SequencerView(ttk.Frame):
         else:
             self.on_drag(row, clip, target, delta, duplicate)
 
-    def _finish_clip_click(self):
-        self._clip_click_redraw = None
-        self.draw()
-        if self.on_track:
-            self.on_track(self.selected_track)
+    def _refresh_clip_selection(self):
+        """Update clip outlines in place without replacing Canvas item IDs."""
+        for item in self.canvas.find_withtag("midi-clip"):
+            tags = self.canvas.gettags(item)
+            clip_tag = next((tag for tag in tags if tag.startswith("clip-")), None)
+            if clip_tag is None:
+                continue
+            try:
+                _, row, clip = clip_tag.split("-")
+                row, clip = int(row), int(clip)
+            except ValueError:
+                continue
+            selected = (row, clip) in self.selected_clips
+            audible = row not in self.muted and (not self.solo or row in self.solo)
+            self.canvas.itemconfigure(
+                item,
+                outline="#f97316" if selected else ("#1d4ed8" if audible else "#64748b"),
+                width=3 if selected else 1,
+            )
 
     def double_click(self, event):
         """Open an editor on a MIDI part, not only on a track header.
@@ -770,10 +783,6 @@ class SequencerView(ttk.Frame):
         if not any(start <= tick <= max(end, start + self.song.division // 4)
                    for start, end in track_clips(self.song.tracks[row], self.song.division)):
             return
-        pending = getattr(self, '_clip_click_redraw', None)
-        if pending is not None:
-            self.after_cancel(pending)
-            self._clip_click_redraw = None
         self.suppress_release = True
         self.drag_origin = None
         self.resize_origin = False
@@ -846,7 +855,8 @@ class SequencerView(ttk.Frame):
                 c.create_rectangle(x1, y + 8, max(x1 + 8, x2), y + self.row_height - 8,
                                    fill="#3b82f6" if audible else "#94a3b8",
                                    outline="#f97316" if (index, clip_index) in self.selected_clips else ("#1d4ed8" if audible else "#64748b"),
-                                   width=3 if (index, clip_index) in self.selected_clips else 1)
+                                   width=3 if (index, clip_index) in self.selected_clips else 1,
+                                   tags=("midi-clip", f"clip-{index}-{clip_index}"))
                 if self.show_note_preview:
                     top, bottom = y + 11, y + self.row_height - 11
                     for left, right, pitch in clip_note_preview(
