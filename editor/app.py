@@ -1535,6 +1535,8 @@ class App:
         if self.player.playing:
             messagebox.showwarning('MIDI playback', 'Stop playback before opening another file.')
             return
+        if not self.confirm_discard_changes('opening another file'):
+            return
         path = filedialog.askopenfilename(filetypes=[("MIDI files", "*.mid *.midi"), ("All files", "*.*")])
         if not path:
             return
@@ -1565,6 +1567,7 @@ class App:
         self.muted_channels.clear()
         self.solo_channels.clear()
         self.refresh()
+        self._mark_saved()
         self.status.set(f"{self.path.name} | Format {song.fmt} | {len(song.tracks)} tracks | division {song.division}")
 
     def refresh(self):
@@ -1858,8 +1861,52 @@ class App:
         except OSError as exc:
             self.status.set(f"Cannot save MIDI output preference: {exc}")
 
+    def _document_fingerprint(self):
+        """Fingerprint of the saved document (MIDI, routing, inputs); window
+        layout and playhead are deliberately excluded."""
+        if self.song is None:
+            return None
+        from project_recovery import snapshot_fingerprint
+        try:
+            return snapshot_fingerprint(self.song, getattr(self, 'track_routes', None),
+                                        self.output_name.get(), None,
+                                        midi_inputs=getattr(self, 'track_input_routes', None))
+        except (MidiError, ValueError):
+            return None
+
+    def _mark_saved(self):
+        self._saved_fingerprint = self._document_fingerprint()
+
+    def has_unsaved_changes(self):
+        if self.song is None:
+            return False
+        return self._document_fingerprint() != getattr(self, '_saved_fingerprint', None)
+
+    def confirm_discard_changes(self, action='closing'):
+        """Ask to save unsaved changes. Returns False when the user cancels
+        (or saving fails), True when it is safe to continue."""
+        if not self.has_unsaved_changes():
+            return True
+        name = Path(self.path).name if getattr(self, 'path', None) else 'Untitled'
+        answer = messagebox.askyesnocancel('Unsaved changes', f'Save changes to {name} before {action}?')
+        if answer is None:
+            return False
+        if answer is False:
+            try:
+                from project_recovery import discard_recovery
+                discard_recovery(self.path)
+            except (OSError, TypeError):
+                pass
+            return True
+        path = getattr(self, 'path', None)
+        if path is not None and str(path).lower().endswith('.xgwn'):
+            return bool(self.save_project())
+        return bool(self.save_as())
+
     def close_app(self):
         if getattr(self, "_closing", False):
+            return
+        if not self.confirm_discard_changes('closing'):
             return
         self._closing = True
         for timer_name in ("_transport_timer", "_autosave_timer"):
@@ -2179,6 +2226,8 @@ class App:
         if self.recorder.recording or self.player.playing:
             messagebox.showwarning('XGW Project', 'Stop recording and playback first.')
             return
+        if not self.confirm_discard_changes('opening another project'):
+            return
         target = filedialog.askopenfilename(filetypes=[('XGW Next projects', '*.xgwn')])
         if not target:
             return
@@ -2217,6 +2266,7 @@ class App:
                         self.focus_editor(kind)
                     except (tk.TclError, MidiError):
                         pass
+        self._mark_saved()
         self.status.set(f'Opened XGW project: {target}')
 
     def save_project(self):
@@ -2235,9 +2285,12 @@ class App:
             from project_recovery import discard_recovery
             discard_recovery(self.path)
             self._autosave_fingerprint = None
+            self._mark_saved()
             self.status.set(f'Saved XGW project: {target}')
+            return True
         except (MidiError, OSError) as exc:
             messagebox.showerror('Save project failed', str(exc))
+            return False
 
     def export_xg_midi(self):
         """Opt-in Yamaha XG export; never changes the currently loaded song."""
@@ -2366,9 +2419,12 @@ class App:
             discard_recovery(self.path)
             self.path = Path(target)
             self._autosave_fingerprint = None
+            self._mark_saved()
             self.status.set(f"Saved: {target}")
+            return True
         except (OSError, MidiError) as exc:
             messagebox.showerror("Save failed", str(exc))
+            return False
 
 if __name__ == "__main__":
     root = tk.Tk()
