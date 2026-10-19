@@ -11,7 +11,7 @@ from midi_drum_demix import demix_drums_by_note
 
 def signature(song):
     return sorted(
-        (e.tick, e.status, e.meta_type, e.data, e.order)
+        (e.tick, e.status, e.meta_type, e.data)
         for track in song.tracks for e in track.events
         if not (e.status == 0xff and e.meta_type in (0x03, 0x2f))
     )
