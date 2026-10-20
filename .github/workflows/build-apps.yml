@@ -30,10 +30,10 @@ jobs:
         run: python -m pytest tests -q
       - name: Package desktop app (Windows, single EXE)
         if: runner.os == 'Windows'
-        run: python -m PyInstaller --noconfirm --clean --onefile --windowed --name XGW-Next --paths editor editor/app.py
+        run: python -m PyInstaller --noconfirm --clean --onefile --windowed --name XGW-Next --hidden-import mido.backends.rtmidi --collect-submodules mido.backends --collect-submodules rtmidi --paths editor editor/app.py
       - name: Package desktop app (macOS, .app bundle)
         if: runner.os == 'macOS'
-        run: python -m PyInstaller --noconfirm --clean --onedir --windowed --name XGW-Next --paths editor editor/app.py
+        run: python -m PyInstaller --noconfirm --clean --onedir --windowed --name XGW-Next --hidden-import mido.backends.rtmidi --collect-submodules mido.backends --collect-submodules rtmidi --paths editor editor/app.py
       - name: Archive Windows executable
         if: runner.os == 'Windows'
         shell: pwsh
