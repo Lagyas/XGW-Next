@@ -21,6 +21,6 @@ Reported on macOS (applies to all platforms).
   all, D duplicate, **C copy, X cut, V paste** (at the song position, snapped);
   Backspace deletes. macOS right button (Button-2) for the selection box and
   CC menu. Undo/Redo shortcuts also in the main window (not inside text fields).
-- Tests: `tests/test_beta1_fix9_piano_roll_editing.py`.
+- Tests: `tests/test_beta1_fix10_piano_roll_editing.py`.
 
 Suite: 1197 passed, 9 skipped. GUI behaviour on macOS still to be confirmed by the user.

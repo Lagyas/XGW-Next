@@ -1,4 +1,4 @@
-"""Beta 1 Fix 9: Piano Roll note grabbing, vertical moves, copy / paste and
+"""Beta 1 Fix 10: Piano Roll note grabbing, vertical moves, copy / paste and
 macOS shortcuts."""
 from midi import Event, Song, Track
 from piano_roll import (KEYBOARD_WIDTH, NOTE_HEIGHT, PIXELS_PER_BEAT, TOP_MARGIN, copy_notes,
