@@ -178,6 +178,7 @@ class App:
         view_menu.add_command(label="Staff / Notation (selected track)...", command=self.open_staff_editor)
         view_menu.add_command(label="MIDI Controller Editor (selected track)...", command=self.open_controller_editor)
         view_menu.add_command(label="Yamaha XG Part Editor...", command=self.open_xg_editor)
+        view_menu.add_command(label="Lyrics / Karaoke Editor (selected track)...", command=self.open_lyrics_editor)
         menu.add_cascade(label="View", menu=view_menu)
         window_menu = tk.Menu(menu, tearoff=0)
         for kind in WINDOW_KINDS:
@@ -1629,6 +1630,12 @@ class App:
                 piano.track_index = target
                 piano.title(f'Piano Roll — Track {piano.track_index + 1}')
                 piano.render()
+        lyrics = windows.get('Lyrics')
+        if lyrics is not None and lyrics.winfo_exists():
+            try:
+                lyrics.reload()
+            except (MidiError, tk.TclError):
+                pass
         self.notify_midi_editors()
 
     def apply_batch_event_edit(self, selections, delta, duplicate=False, destination_track=None):
@@ -2009,6 +2016,7 @@ class App:
             "Master Track": self.open_master_track,
             "MIDI Mixer": self.open_midi_mixer,
             "XG Part Editor": self.open_xg_editor,
+            "Lyrics": self.open_lyrics_editor,
         }
         methods[kind]()
 
@@ -2057,6 +2065,14 @@ class App:
             messagebox.showinfo("List Editor", "Open a MIDI file and select a track first.")
             return
         self.workspace.open("List Editor", lambda: ListEditor(self, track))
+
+    def open_lyrics_editor(self):
+        track = self.selected_track()
+        if self.song is None or track is None:
+            messagebox.showinfo("Lyrics", "Open a MIDI file and select a track first.")
+            return
+        from lyrics_editor import LyricsEditor
+        self.workspace.open("Lyrics", lambda: LyricsEditor(self, track))
 
     def open_piano_roll(self):
         track = self.selected_track()

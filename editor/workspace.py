@@ -2,7 +2,7 @@
 
 WINDOW_KINDS = ("Piano Roll", "List Editor", "Drum Editor", "Staff",
                 "Controller Editor", "Master Track", "MIDI Mixer",
-                "XG Part Editor")
+                "XG Part Editor", "Lyrics")
 
 
 def valid_geometry(value):

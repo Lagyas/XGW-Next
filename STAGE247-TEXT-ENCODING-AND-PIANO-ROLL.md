@@ -31,3 +31,18 @@ Reported on macOS (applies to all platforms).
 - Test: `tests/test_stage229_project_undo_state.py::test_undo_redo_selection_follows_moved_track`.
 
 Suite: 1198 passed, 9 skipped. GUI behaviour on macOS still to be confirmed by the user.
+
+## Lyrics / Karaoke editor (Beta 1 Fix 12)
+- View ▸ Lyrics / Karaoke Editor and Window ▸ Lyrics (`editor/lyrics_editor.py`,
+  logic in `editor/lyrics_ops.py`).
+- Lists the lyric events (FF 05) of a track with bar:beat:tick; insert at the song
+  position, edit text/position, move to the song position, delete — all undoable.
+- Song text box: words by spaces, syllables by "-", a new line → "/", an empty
+  line → new page "<" (XF; ".kar" "\" pages are read too). "Assign syllables to
+  notes" places them on the distinct note starts of a melody track from a
+  position (optionally replacing lyrics in that range). "Load current lyrics"
+  turns existing lyrics back into editable text.
+- Karaoke view follows the song position: current page, sung syllables orange.
+- Text is stored in the selected text encoding (default Windows-1250).
+- Tests: `tests/test_lyrics_ops.py`; GUI smoke test on Windows (assign 16
+  syllables, Czech diacritics, karaoke highlight, undo).
