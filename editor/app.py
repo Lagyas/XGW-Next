@@ -1739,11 +1739,10 @@ class App:
                 event.tick, event.channel() or "-", event.label(), event.description()))
 
     def snapshot(self):
-        from project_undo_state import capture
         self.redo_history.clear()
         snapshot = copy.deepcopy(self.song)
         self.history.append(snapshot)
-        self._undo_project_state[id(snapshot)] = capture(self)
+        self._undo_project_state[id(snapshot)] = self._capture_history_state()
         if len(self.history) > 15:
             removed = self.history.pop(0)
             self._undo_project_state.pop(id(removed), None)
@@ -1821,36 +1820,62 @@ class App:
                 self.song = self.history.pop()
             messagebox.showerror("Multi-track Quantize", str(exc), parent=self.root)
 
+    def _capture_history_state(self):
+        from project_undo_state import capture
+        state = capture(self)
+        if hasattr(self, "tracks"):
+            # Undo/Redo returns to the track selected when the state was taken,
+            # so the selection follows a moved track instead of its row number.
+            state["selected_track"] = self.selected_track()
+        return state
+
+    def _reselect_track(self, state):
+        index = (state or {}).get("selected_track")
+        if index is None or self.song is None or not 0 <= index < len(self.song.tracks):
+            return
+        if index == self.selected_track():
+            return
+        self.tracks.selection_set(str(index))
+        self.tracks.see(str(index))
+        self.sequencer.select_track(index)
+        self.show_events()
+        self.sync_track_editors()
+        self.refresh_open_editors()
+
     def undo(self):
         if self.history and self.song is not None:
-            from project_undo_state import capture, restore
+            from project_undo_state import restore
             current = copy.deepcopy(self.song)
             self.redo_history.append(current)
-            self._undo_project_state[id(current)] = capture(self)
+            self._undo_project_state[id(current)] = self._capture_history_state()
             if len(self.redo_history) > 15:
                 removed = self.redo_history.pop(0)
                 self._undo_project_state.pop(id(removed), None)
             previous = self.history.pop()
-            restore(self, self._undo_project_state.pop(id(previous), None))
+            state = self._undo_project_state.pop(id(previous), None)
+            restore(self, state)
             self.song = previous
             self.shared_note_selection.clear()
             self.refresh()
+            self._reselect_track(state)
             self.status.set("Undo completed.")
 
     def redo(self):
         if self.redo_history and self.song is not None:
-            from project_undo_state import capture, restore
+            from project_undo_state import restore
             current = copy.deepcopy(self.song)
             self.history.append(current)
-            self._undo_project_state[id(current)] = capture(self)
+            self._undo_project_state[id(current)] = self._capture_history_state()
             if len(self.history) > 15:
                 removed = self.history.pop(0)
                 self._undo_project_state.pop(id(removed), None)
             next_song = self.redo_history.pop()
-            restore(self, self._undo_project_state.pop(id(next_song), None))
+            state = self._undo_project_state.pop(id(next_song), None)
+            restore(self, state)
             self.song = next_song
             self.shared_note_selection.clear()
             self.refresh()
+            self._reselect_track(state)
             self.status.set("Redo completed.")
 
     def notify_midi_editors(self, origin=None):

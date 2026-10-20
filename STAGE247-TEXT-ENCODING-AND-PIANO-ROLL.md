@@ -23,4 +23,11 @@ Reported on macOS (applies to all platforms).
   CC menu. Undo/Redo shortcuts also in the main window (not inside text fields).
 - Tests: `tests/test_beta1_fix10_piano_roll_editing.py`.
 
-Suite: 1197 passed, 9 skipped. GUI behaviour on macOS still to be confirmed by the user.
+## Track selection after Undo / Redo (Beta 1 Fix 11)
+- From the Stage 246 checklist: after Undo of "Move track" the Tracks selection
+  stayed on the row number instead of following the moved track.
+- Undo snapshots now also store the selected track; Undo / Redo reselect it
+  (`App._capture_history_state`, `App._reselect_track`).
+- Test: `tests/test_stage229_project_undo_state.py::test_undo_redo_selection_follows_moved_track`.
+
+Suite: 1198 passed, 9 skipped. GUI behaviour on macOS still to be confirmed by the user.
