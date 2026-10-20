@@ -1,10 +1,11 @@
 """XGW Next prototype: track/event inspector and basic MIDI editor."""
 import copy
+import sys
 import time
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
 from pathlib import Path
-from midi import Song, MidiError, Event, Track
+from midi import Song, MidiError, Event, Track, TEXT_ENCODINGS, set_text_encoding
 from piano_roll import PianoRoll
 from midi_output import MidiPlayer, available_outputs, tick_seconds
 from midi_recording import MidiRecorder, available_inputs
@@ -77,6 +78,9 @@ class App:
         self.track_routes = {}
         self.routed_monitor = {}
         self.output_name = tk.StringVar(value=load_settings().get("midi_output", ""))
+        saved_encoding = load_settings().get("text_encoding", "cp1250")
+        self.text_encoding = tk.StringVar(value=saved_encoding if saved_encoding in TEXT_ENCODINGS else "cp1250")
+        set_text_encoding(self.text_encoding.get())
         self.send_sysex = tk.BooleanVar(value=False)
         self.play_start_tick = tk.StringVar(value="0")
         self.metronome_enabled = tk.BooleanVar(value=False)
@@ -96,6 +100,14 @@ class App:
         self._autosave_fingerprint = None
         self.make_ui()
         self.root.bind_all("<KeyPress-space>", self._space_transport, add="+")
+        # Undo / Redo shortcuts (Command on macOS, Control everywhere); editors
+        # with their own handling return "break" before these run.
+        for mod in (("Command", "Control") if sys.platform == "darwin" else ("Control",)):
+            self.root.bind_all(f"<{mod}-z>", self._shortcut_undo, add="+")
+            self.root.bind_all(f"<{mod}-Z>", self._shortcut_redo, add="+")
+            self.root.bind_all(f"<{mod}-Shift-z>", self._shortcut_redo, add="+")
+            self.root.bind_all(f"<{mod}-Shift-Z>", self._shortcut_redo, add="+")
+            self.root.bind_all(f"<{mod}-y>", self._shortcut_redo, add="+")
         self._cursor_bookmark_tick = None
         # One handler avoids overlapping/incorrect keypad bindings on Windows.
         # Do not bind ordinary Home/End/Down/PageDown: they are not keypad keys.
@@ -157,6 +169,11 @@ class App:
             double_click_menu.add_radiobutton(label=editor_name, variable=self.track_double_click_editor,
                                               value=editor_name)
         view_menu.add_cascade(label="Track double-click opens", menu=double_click_menu)
+        encoding_menu = tk.Menu(view_menu, tearoff=0)
+        for code, label in TEXT_ENCODINGS.items():
+            encoding_menu.add_radiobutton(label=label, variable=self.text_encoding, value=code,
+                                          command=self.apply_text_encoding)
+        view_menu.add_cascade(label="Text encoding (names, lyrics, markers)", menu=encoding_menu)
         view_menu.add_command(label="Drum Editor (selected track)...", command=self.open_drum_editor)
         view_menu.add_command(label="Staff / Notation (selected track)...", command=self.open_staff_editor)
         view_menu.add_command(label="MIDI Controller Editor (selected track)...", command=self.open_controller_editor)
@@ -1856,10 +1873,40 @@ class App:
         try:
             from xg_mixer_bridge import encode_part_assignments
             save_settings({"midi_output": self.output_name.get(),
+                           "text_encoding": self.text_encoding.get(),
                            "window_geometry": self.workspace.geometry,
                            "xg_part_assignments": encode_part_assignments(self.xg_part_assignments)})
         except OSError as exc:
             self.status.set(f"Cannot save MIDI output preference: {exc}")
+
+    @staticmethod
+    def _typing_into(widget):
+        """True when keyboard focus is in a text field (keep its own undo)."""
+        try:
+            return widget is not None and widget.winfo_class() in ("Entry", "TEntry", "Text", "Spinbox", "TSpinbox", "TCombobox")
+        except (tk.TclError, AttributeError):
+            return False
+
+    def _shortcut_undo(self, event=None):
+        if self._typing_into(getattr(event, "widget", None)):
+            return None
+        self.undo()
+        return "break"
+
+    def _shortcut_redo(self, event=None):
+        if self._typing_into(getattr(event, "widget", None)):
+            return None
+        self.redo()
+        return "break"
+
+    def apply_text_encoding(self):
+        """Re-display track names and text events in the chosen encoding
+        (display only: the MIDI bytes are not changed)."""
+        set_text_encoding(self.text_encoding.get())
+        self.save_preferences()
+        if self.song is not None:
+            self.refresh()
+        self.status.set(f"Text encoding: {TEXT_ENCODINGS[self.text_encoding.get()]}")
 
     def _document_fingerprint(self):
         """Fingerprint of the saved document (MIDI, routing, inputs); window

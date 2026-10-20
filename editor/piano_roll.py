@@ -5,6 +5,7 @@ existing Song.set_event() method and the application's undo snapshots.
 """
 from collections import defaultdict, deque
 from copy import deepcopy
+import sys
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 from midi import MidiError
@@ -75,6 +76,69 @@ def controller_channel(track, notes, selection="Auto"):
         return channel
     return notes[0][3] if notes else 1
 
+# macOS: shortcuts use Command (Control also accepted); right click is Button-2.
+IS_MAC = sys.platform == "darwin"
+SHORTCUT_MODIFIERS = ("Command", "Control") if IS_MAC else ("Control",)
+RIGHT_BUTTON = 2 if IS_MAC else 3
+# A drag must move this far sideways before a note changes its start; keeps
+# vertical (pitch) moves from jumping in time.
+HORIZONTAL_DEADZONE = 10
+
+
+def note_at(notes, division, x, y, tolerance=3.0):
+    """Index of the note under canvas point (x, y) or None.
+
+    Geometric hit test from the note list (independent of the pointer and the
+    canvas item stack); the last drawn note wins, a few pixels of tolerance
+    make short notes easy to grab."""
+    if division <= 0 or division & 0x8000 or y < TOP_MARGIN:
+        return None
+    pitch = 127 - int((y - TOP_MARGIN) // NOTE_HEIGHT)
+    found = None
+    for index, (start, end, note_pitch, *_rest) in enumerate(notes):
+        if note_pitch != pitch:
+            continue
+        x1 = KEYBOARD_WIDTH + start / division * PIXELS_PER_BEAT
+        x2 = max(x1 + 3, KEYBOARD_WIDTH + max(end, start + 1) / division * PIXELS_PER_BEAT)
+        if x1 - tolerance <= x <= x2 + tolerance:
+            found = index
+    return found
+
+
+def drag_delta(dx, dy, division, deadzone=HORIZONTAL_DEADZONE):
+    """(tick delta, pitch delta) of a note drag in pixels; small sideways
+    jitter is ignored while the move is mostly vertical."""
+    if abs(dx) < (deadzone if abs(dy) >= NOTE_HEIGHT / 2 else 2):
+        dx = 0
+    return round(dx * division / PIXELS_PER_BEAT), -round(dy / NOTE_HEIGHT)
+
+
+def copy_notes(notes, pairs):
+    """Clipboard entries (offset, duration, pitch, velocity, channel) of the
+    selected notes, relative to the earliest selected start."""
+    chosen = [n for n in notes if (n[5], n[6]) in pairs]
+    if not chosen:
+        return []
+    first = min(n[0] for n in chosen)
+    return [(start - first, max(1, end - start), pitch, max(1, velocity), channel)
+            for start, end, pitch, channel, velocity, _, _ in chosen]
+
+
+def paste_notes(song, track_index, clip, at_tick):
+    """Insert clipboard notes starting at `at_tick`; returns the inserted
+    (tick, pitch, channel) keys. Validates everything before changing the song."""
+    if at_tick < 0:
+        raise MidiError("Paste position must not be negative")
+    for offset, duration, pitch, velocity, channel in clip:
+        if not 0 <= pitch <= 127 or not 1 <= channel <= 16 or at_tick + offset + duration > 0x0fffffff:
+            raise MidiError("Clipboard note out of range")
+    keys = []
+    for offset, duration, pitch, velocity, channel in clip:
+        insert_note(song, track_index, at_tick + offset, duration, pitch, velocity=velocity, channel=channel)
+        keys.append((at_tick + offset, pitch, channel))
+    return keys
+
+
 def pitch_label(pitch):
     names = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
     return f"{names[pitch % 12]}{pitch // 12 - 1}"
@@ -107,7 +171,7 @@ class PianoRoll(tk.Toplevel):
         self.selected_controllers = set()
         self.controller_region_preview = None
         self.controller_transform_preview = None
-        self.velocity_canvas.bind("<Button-3>", self.controller_context_menu)
+        self.velocity_canvas.bind(f"<Button-{RIGHT_BUTTON}>", self.controller_context_menu)
         self.xscroll = xscroll
         self.canvas.grid(row=0, column=0, sticky="nsew")
         yscroll.grid(row=0, column=1, sticky="ns")
@@ -122,20 +186,27 @@ class PianoRoll(tk.Toplevel):
         self.canvas.bind("<ButtonRelease-1>", self.end_drag)
         self.canvas.bind("<Double-Button-1>", self.edit_note)
         self.canvas.bind("<Shift-Button-1>", self.seek_ruler)
-        self.canvas.bind("<ButtonPress-3>", self.begin_selection_box)
-        self.canvas.bind("<B3-Motion>", self.move_selection_box)
-        self.canvas.bind("<ButtonRelease-3>", self.finish_selection_box)
+        self.canvas.bind(f"<ButtonPress-{RIGHT_BUTTON}>", self.begin_selection_box)
+        self.canvas.bind(f"<B{RIGHT_BUTTON}-Motion>", self.move_selection_box)
+        self.canvas.bind(f"<ButtonRelease-{RIGHT_BUTTON}>", self.finish_selection_box)
         self.bind("<Delete>", lambda event: self.delete_selected())
-        self.bind("<Control-z>", self.undo_note_edit)
-        self.bind("<Control-y>", self.redo_note_edit)
-        self.bind("<Control-Shift-Z>", self.redo_note_edit)
-        self.bind("<Control-a>", self.select_all_notes)
-        self.bind("<Control-d>", self.duplicate_selected)
+        self.bind("<BackSpace>", lambda event: self.delete_selected())
+        self.clipboard_notes = []
+        for mod in SHORTCUT_MODIFIERS:
+            self.bind(f"<{mod}-z>", self.undo_note_edit)
+            self.bind(f"<{mod}-Z>", self.redo_note_edit)
+            self.bind(f"<{mod}-Shift-z>", self.redo_note_edit)
+            self.bind(f"<{mod}-Shift-Z>", self.redo_note_edit)
+            self.bind(f"<{mod}-y>", self.redo_note_edit)
+            self.bind(f"<{mod}-a>", self.select_all_notes)
+            self.bind(f"<{mod}-d>", self.duplicate_selected)
+            self.bind(f"<{mod}-c>", self.copy_selected)
+            self.bind(f"<{mod}-x>", self.cut_selected)
+            self.bind(f"<{mod}-v>", self.paste_clipboard)
         self.bind("<Alt-Up>", lambda event: self.nudge_selected_notes(pitch=1))
         self.bind("<Alt-Down>", lambda event: self.nudge_selected_notes(pitch=-1))
         self.bind("<Alt-Left>", lambda event: self.nudge_selected_notes(steps=-1))
         self.bind("<Alt-Right>", lambda event: self.nudge_selected_notes(steps=1))
-        self.bind("<Control-Shift-z>", self.redo_note_edit)
         self.protocol("WM_DELETE_WINDOW", self.close_editor)
         toolbar = ttk.Frame(self)
         toolbar.pack(fill="x", padx=8, pady=4)
@@ -189,7 +260,7 @@ class PianoRoll(tk.Toplevel):
         self.right_origin = None
         self.context_menu = tk.Menu(self, tearoff=0)
         self.render()
-        self.canvas.yview_moveto(0.32)
+        self.scroll_to_notes()
 
     def seek_ruler(self, event):
         """Shift-click the timeline to reposition the shared transport cursor."""
@@ -633,7 +704,7 @@ class PianoRoll(tk.Toplevel):
         """Right-click opens a menu; right-drag on empty space selects a region.
         Ctrl+right-drag on notes copies and moves the notes in one gesture.
         """
-        index = self.hit_note()
+        index = self.hit_note(event)
         x, y = self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
         self.right_origin = (index, x, y, event.x_root, event.y_root, bool(event.state & 0x0004))
         self.selection_origin = None
@@ -954,6 +1025,19 @@ class PianoRoll(tk.Toplevel):
         self.render_velocity(width)
         self.update_playhead()
 
+    def scroll_to_notes(self):
+        """Show the track's notes: centre the view on their pitch range."""
+        if not self.notes:
+            self.canvas.yview_moveto(0.32)
+            return
+        pitches = sorted(n[2] for n in self.notes)
+        centre = (pitches[0] + pitches[-1]) / 2
+        total = TOP_MARGIN + 128 * NOTE_HEIGHT
+        y = TOP_MARGIN + (127 - centre) * NOTE_HEIGHT
+        self.update_idletasks()
+        visible = max(1, self.canvas.winfo_height()) or 400
+        self.canvas.yview_moveto(max(0.0, min(1.0, (y - visible / 2) / total)))
+
     def close_editor(self):
         """Cancel the transport poll before destroying the editor window."""
         timer = getattr(self, "_playhead_timer", None)
@@ -997,18 +1081,59 @@ class PianoRoll(tk.Toplevel):
                                                (float(bounds[2]) - self.canvas.winfo_width())))
                         self.canvas.xview_moveto(fraction)
 
-    def hit_note(self):
-        x = self.canvas.canvasx(self.winfo_pointerx() - self.canvas.winfo_rootx())
-        y = self.canvas.canvasy(self.winfo_pointery() - self.canvas.winfo_rooty())
-        found = self.canvas.find_overlapping(x, y, x, y)
-        for item in reversed(found):
-            for tag in self.canvas.gettags(item):
-                if tag.startswith("note_"):
-                    return int(tag[5:])
-        return None
+    def hit_note(self, event=None):
+        if event is not None:
+            x, y = self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
+        else:
+            x = self.canvas.canvasx(self.winfo_pointerx() - self.canvas.winfo_rootx())
+            y = self.canvas.canvasy(self.winfo_pointery() - self.canvas.winfo_rooty())
+        return note_at(self.notes, self.app.song.division, x, y)
+
+    def copy_selected(self, _event=None):
+        """Copy the selected notes (Cmd/Ctrl+C)."""
+        clip = copy_notes(self.notes, set(self.selected_note_pairs()))
+        if clip:
+            self.clipboard_notes = clip
+            self.app.note_clipboard = clip
+            self.info.set(f"Copied {len(clip)} notes. Paste with {SHORTCUT_MODIFIERS[0]}+V at the song position.")
+        return "break"
+
+    def cut_selected(self, _event=None):
+        """Copy, then delete the selected notes (Cmd/Ctrl+X)."""
+        if self.selected_note_pairs():
+            self.copy_selected()
+            self.delete_selected()
+        return "break"
+
+    def paste_clipboard(self, _event=None):
+        """Paste copied notes at the song position, snapped (Cmd/Ctrl+V)."""
+        clip = self.clipboard_notes or getattr(self.app, "note_clipboard", [])
+        if not clip:
+            self.info.set("Nothing to paste: copy notes first.")
+            return "break"
+        division = self.app.song.division
+        if division <= 0 or division & 0x8000:
+            return "break"
+        at = snapped_tick(max(0, int(getattr(self.app, "playhead_tick", 0))), division, self.snap_option.get())
+        try:
+            trial = deepcopy(self.app.song)
+            paste_notes(trial, self.track_index, clip, at)
+            self.app.snapshot()
+            keys = set(paste_notes(self.app.song, self.track_index, clip, at))
+            self.notes = extract_notes(self.app.song.tracks[self.track_index])
+            self.selected_pairs = {(n[5], n[6]) for n in self.notes if (n[0], n[2], n[3]) in keys}
+            self.render()
+            self.publish_note_selection()
+            self.app.show_events()
+            if hasattr(self.app, "notify_midi_editors"):
+                self.app.notify_midi_editors(origin=self)
+            self.info.set(f"Pasted {len(clip)} notes at tick {at}.")
+        except MidiError as exc:
+            messagebox.showerror("Paste notes", str(exc), parent=self)
+        return "break"
 
     def select_note(self, _event=None):
-        self.selected = self.hit_note()
+        self.selected = self.hit_note(_event)
         if self.selected is not None:
             start, end, pitch, channel, velocity, _, _ = self.notes[self.selected]
             self.info.set(f"{pitch_label(pitch)} | channel {channel} | start {start} | "
@@ -1156,7 +1281,7 @@ class PianoRoll(tk.Toplevel):
             messagebox.showerror("Draw note", str(exc), parent=self)
 
     def begin_drag(self, event):
-        index = self.hit_note()
+        index = self.hit_note(event)
         if index is None and self.draw_tool.get():
             self.drag_origin = None
             self.draw_note_at(event)
@@ -1193,12 +1318,18 @@ class PianoRoll(tk.Toplevel):
         if index >= len(self.notes):
             return
         start, end, pitch, _, _, _, _ = self.notes[index]
+        # keep dragging when the pointer leaves the visible area
+        height = self.canvas.winfo_height()
+        if event.y < 16:
+            self.canvas.yview_scroll(-1, "units")
+        elif height > 32 and event.y > height - 16:
+            self.canvas.yview_scroll(1, "units")
         dx = self.canvas.canvasx(event.x) - old_x
         dy = self.canvas.canvasy(event.y) - old_y
-        tick = (start if abs(dx) < 2 else
-                snapped_tick(max(0, round(start + dx * self.app.song.division / PIXELS_PER_BEAT)),
-                             self.app.song.division, self.snap_option.get()))
-        target_pitch = max(0, min(127, pitch - round(dy / NOTE_HEIGHT)))
+        dticks, dpitch = drag_delta(dx, dy, self.app.song.division)
+        tick = (start if not dticks else
+                snapped_tick(max(0, start + dticks), self.app.song.division, self.snap_option.get()))
+        target_pitch = max(0, min(127, pitch + dpitch))
         if resizing:
             tick = start
             target_pitch = pitch
@@ -1226,10 +1357,10 @@ class PianoRoll(tk.Toplevel):
         start, end, pitch, _, _, on_idx, off_idx = self.notes[index]
         dx = self.canvas.canvasx(event.x) - old_x
         dy = self.canvas.canvasy(event.y) - old_y
-        tick = (start if abs(dx) < 2 else
-                snapped_tick(max(0, round(start + dx * self.app.song.division / PIXELS_PER_BEAT)),
-                             self.app.song.division, self.snap_option.get()))
-        target_pitch = max(0, min(127, pitch - round(dy / NOTE_HEIGHT)))
+        dticks, dpitch = drag_delta(dx, dy, self.app.song.division)
+        tick = (start if not dticks else
+                snapped_tick(max(0, start + dticks), self.app.song.division, self.snap_option.get()))
+        target_pitch = max(0, min(127, pitch + dpitch))
         if resizing:
             new_end = (end if abs(dx) < 2 else
                        max(start + 1, snapped_tick(max(0, round(end + dx * self.app.song.division / PIXELS_PER_BEAT)),
@@ -1260,7 +1391,7 @@ class PianoRoll(tk.Toplevel):
             messagebox.showerror("Move note", str(exc), parent=self)
 
     def edit_note(self, _event=None, selected_index=None):
-        self.selected = self.hit_note() if selected_index is None else selected_index
+        self.selected = self.hit_note(_event) if selected_index is None else selected_index
         if self.selected is None:
             return
         start, end, pitch, channel, velocity, on_idx, off_idx = self.notes[self.selected]
