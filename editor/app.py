@@ -38,7 +38,9 @@ THEMES = {
 class App:
     def __init__(self, root):
         self.root = root
-        self.root.title("XGW Next 0.3 — Sequencer")
+        from version import version_label
+        self.version_label = version_label()
+        self.root.title(f"XGW Next {self.version_label} — Sequencer")
         self.root.geometry("1250x760")
         self.song = None
         self.xws_track_properties = None
@@ -210,6 +212,10 @@ class App:
         transport_menu.add_command(label='Choose MIDI input...', command=self.choose_input)
         transport_menu.add_command(label='Record', command=self.start_recording)
         menu.add_cascade(label='Transport', menu=transport_menu)
+        help_menu = tk.Menu(menu, tearoff=0)
+        help_menu.add_command(label="About XGW Next…", command=self.show_about)
+        help_menu.add_command(label="Copy version info", command=self.copy_version_info)
+        menu.add_cascade(label="Help", menu=help_menu)
         self.root.config(menu=menu)
 
         transport_bar = ttk.Frame(self.root)
@@ -1910,6 +1916,16 @@ class App:
                            "xg_part_assignments": encode_part_assignments(self.xg_part_assignments)})
         except OSError as exc:
             self.status.set(f"Cannot save MIDI output preference: {exc}")
+
+    def show_about(self):
+        from version import about_text
+        messagebox.showinfo("About XGW Next", about_text())
+
+    def copy_version_info(self):
+        from version import about_text
+        self.root.clipboard_clear()
+        self.root.clipboard_append(about_text())
+        self.status.set(f"Version info copied: XGW Next {self.version_label}")
 
     @staticmethod
     def _typing_into(widget):

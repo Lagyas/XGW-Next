@@ -6,5 +6,6 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 source .venv/bin/activate
 python -m pip install --upgrade pip pyinstaller "mido>=1.3,<2" "python-rtmidi>=1.5,<2" "pytest>=8,<10"
 PYTHONPATH="$(pwd)/editor" python -m pytest tests -q
+python tools/write_build_info.py
 python -m PyInstaller --noconfirm --clean --windowed --onedir --name XGW-Next --hidden-import mido.backends.rtmidi --collect-submodules mido.backends --collect-submodules rtmidi --paths editor editor/app.py
 echo "Application: $(pwd)/dist/XGW-Next.app"

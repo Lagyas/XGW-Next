@@ -19,6 +19,8 @@ if errorlevel 1 (
   echo ERROR: Unit tests failed. EXE was not built.
   exit /b 1
 )
+python tools\write_build_info.py
+if errorlevel 1 exit /b 1
 python -m PyInstaller --noconfirm --clean XGW-Next.spec
 if errorlevel 1 exit /b 1
 if not exist "dist\XGW-Next.exe" (

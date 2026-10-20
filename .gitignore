@@ -28,3 +28,6 @@ SONGS.ZIP
 *.rar
 reference-material/
 private-fixtures/
+
+# generated at build time (tools/write_build_info.py)
+editor/build_info.py

@@ -20,6 +20,16 @@ playback and SysEx sending require a compatible connected MIDI interface.
 Build artifacts expire after 14 days. GitHub Actions must be enabled in
 the repository. An artifact appears only after the build succeeds.
 
+## Which version am I running?
+
+**Help ▸ About XGW Next…** shows the version (e.g. *0.4.0 Beta 1 Fix 13*), the
+git tag (`v0.4.0-beta1.13`), the commit and the build date; the window title shows
+the version and commit too. **Help ▸ Copy version info** copies it for bug
+reports. All changes are listed in [CHANGELOG.md](CHANGELOG.md).
+
+To update a local build: `git pull`, then `build-local-windows.bat` or
+`bash build-local-macos.sh` — the new app then shows the new commit.
+
 ## Goals
 
 - Windows and macOS support
