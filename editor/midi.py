@@ -21,6 +21,39 @@ def vlq_write(value):
     while value: a.insert(0, (value & 127) | 128); value >>= 7
     return bytes(a)
 
+# Text meta events (track names, markers, lyrics …) carry no encoding in SMF.
+# Default Windows-1250 (Central European); selectable in View > Text encoding.
+TEXT_ENCODINGS = {
+    'cp1250': 'Windows-1250 (Central European)',
+    'cp1252': 'Windows-1252 (Western)',
+    'latin-1': 'ISO-8859-1 (Latin-1)',
+    'cp932': 'Shift-JIS (Japanese)',
+    'utf-8': 'UTF-8',
+}
+_text_encoding = 'cp1250'
+
+
+def set_text_encoding(name):
+    global _text_encoding
+    if name not in TEXT_ENCODINGS:
+        raise ValueError(f'Unsupported text encoding: {name}')
+    _text_encoding = name
+
+
+def get_text_encoding():
+    return _text_encoding
+
+
+def decode_text(data, encoding=None):
+    """Decode MIDI text bytes for display (never raises)."""
+    return bytes(data).decode(encoding or _text_encoding, errors='replace')
+
+
+def encode_text(text, encoding=None):
+    """Encode text for a MIDI text meta event; unmappable characters become '?'."""
+    return str(text).encode(encoding or _text_encoding, errors='replace')
+
+
 @dataclass
 class Event:
     tick: int
@@ -38,7 +71,7 @@ class Event:
     def channel(self): return (self.status & 15) + 1 if self.status < 0xf0 else None
     def description(self):
         if self.status == 0xff and self.meta_type in (1,2,3,4,5,6,7):
-            return self.data.decode('latin-1',errors='replace')
+            return decode_text(self.data)
         if self.status == 0xff and self.meta_type == 0x51 and len(self.data)==3:
             micro=int.from_bytes(self.data,'big'); return f'{60000000/micro:.2f} BPM' if micro else 'Invalid tempo'
         if self.status == 0xff and self.meta_type == 0x58 and len(self.data)>=2:
@@ -54,7 +87,7 @@ class Track:
     events: list[Event] = field(default_factory=list)
     def name(self):
         for e in self.events:
-            if e.status == 0xff and e.meta_type == 3: return e.data.decode('latin-1',errors='replace')
+            if e.status == 0xff and e.meta_type == 3: return decode_text(e.data)
         return 'Untitled'
 
 class Song:

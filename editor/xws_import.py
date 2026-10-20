@@ -5,7 +5,7 @@ four-byte big-endian duration instead of a separate note-off event.
 This importer intentionally does not claim to restore XWS mixer/clip metadata.
 """
 from pathlib import Path
-from midi import Event, Track, Song, MidiError, vlq_read
+from midi import Event, Track, Song, MidiError, vlq_read, decode_text
 
 MAX_FILE = 32 * 1024 * 1024
 MAX_EVENTS = 1_000_000
@@ -231,7 +231,7 @@ def inspect_s4wt_records(raw):
                 'sequence_track': index + 1 if index < track_count else None,
                 'length': len(body),
                 'name': name.decode('ascii') if name is not None and name.isascii() else
-                        (name.decode('latin-1') if name is not None else None),
+                        (decode_text(name) if name is not None else None),
                 'raw_prefix': body[:12].hex(' '),
                 'raw_tail_length': len(body) - 33 - (body[32] if index < track_count and name is not None else 0),
             })
